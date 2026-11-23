@@ -7,44 +7,89 @@ using System.Text.Json;
 namespace OmenMax16.Services;
 
 /// <summary>
-/// HP OMEN MAX 16 (Intel Core Ultra 9 275HX 15~160W + NVIDIA RTX 5070 Ti 140~175W, TPP 250W = 75W+175W)
-/// 게이밍 최적화 전력 제한 설정 저장소.
+/// HP OMEN MAX 16 하드웨어 모델(Intel / AMD + RTX 50 시리즈)별 전력 제한 설정 저장소.
+/// 초기 생성 및 정규화 시 HardwarePlatformDetector.Current 프로파일의 하한/상한/기본값을 적용합니다.
 /// </summary>
 public sealed class AppSettings
 {
+    // 하위 호환용 기본 상수
     public const int MinCpuWatts = 15;
-    public const int MaxCpuWatts = 160;
+    public const int MaxCpuWatts = 171;
     public const int DefaultPl1Watts = 85;
     public const int DefaultPl2Watts = 125;
     public const int DefaultTauSeconds = 32;
-    public const int DefaultTppCpuWatts = 75;   // CPU+GPU 동시 고부하 시 TPP 250W (CPU 75W + GPU 175W) 게이밍 권장 기준
+    public const int DefaultTppCpuWatts = 80;
 
-    public int CpuPl1Watts { get; set; } = DefaultPl1Watts;     // 지속 전력 제한 PL1 (15 ~ 160 W)
-    public int CpuPl2Watts { get; set; } = DefaultPl2Watts;     // 단기 부스트 전력 제한 PL2 (15 ~ 160 W)
-    public int CpuTauSeconds { get; set; } = DefaultTauSeconds; // 부스트 유지 시간 Tau (1 ~ 56 초)
+    // AMD Ryzen (RyzenAdj) 기준 상수
+    public const int MinAmdWatts = 5;
+    public const int MaxAmdWatts = 100;
+    public const int DefaultAmdStapmWatts = 45;
+    public const int DefaultAmdFastWatts = 55;
+    public const int DefaultAmdSlowWatts = 45;
+    public const int MinAmdUvOffset = -40;
+    public const int MaxAmdUvOffset = 0;
 
-    public bool Tpp250AutoBalance { get; set; } = true;         // GPU 고부하 시 CPU 자동 제한 (TPP 250W 균형 배분)
+    // ── 통합 CPU 튜닝 설정 (Intel: PL1/PL2/Tau, AMD: STAPM·Slow/Fast) ──
+    public int CpuPl1Watts { get; set; } = DefaultPl1Watts;
+    public int CpuPl2Watts { get; set; } = DefaultPl2Watts;
+    public int CpuTauSeconds { get; set; } = DefaultTauSeconds;
+
+    public bool Tpp250AutoBalance { get; set; } = true;
     public int TppCpuSimultaneousWatts { get; set; } = DefaultTppCpuWatts;
 
-    public int GpuClockCapMhz { get; set; } = 0;                // 0 = 제한 없음, 1200 ~ 2800 MHz
-    public bool GpuCtgpEnabled { get; set; } = true;            // cTGP ON (140W -> 최대 175W TGP 허용)
-    public bool GpuDynamicBoostEnabled { get; set; } = true;    // PPAB ON (+35W Dynamic Boost)
+    // ── AMD 전용 보조 설정 ───────────────────────────────────────────
+    public int AmdUvOffset { get; set; } = 0;
+    public int AmdStapmWatts { get; set; } = DefaultAmdStapmWatts;
+    public int AmdFastWatts { get; set; } = DefaultAmdFastWatts;
+    public int AmdSlowWatts { get; set; } = DefaultAmdSlowWatts;
+
+    // ── 공통 GPU / 세션 설정 ─────────────────────────────────────────
+    public int GpuClockCapMhz { get; set; } = 0;
+    public bool GpuCtgpEnabled { get; set; } = true;
+    public bool GpuDynamicBoostEnabled { get; set; } = true;
 
     public bool SessionActive { get; set; }
     public DateTime LastActiveUtc { get; set; } = DateTime.MinValue;
 
-    public bool HasCustomCpu =>
-        CpuPl1Watts != DefaultPl1Watts ||
-        CpuPl2Watts != DefaultPl2Watts ||
-        CpuTauSeconds != DefaultTauSeconds;
+    public AppSettings()
+    {
+        ResetTuning();
+    }
+
+    public bool HasCustomCpuTuning
+    {
+        get
+        {
+            var cpu = HardwarePlatformDetector.Current.CpuProfile;
+            if (HardwarePlatformDetector.Current.IsAmd)
+            {
+                return AmdUvOffset != 0 ||
+                       CpuPl1Watts != cpu.DefaultPl1Watts ||
+                       CpuPl2Watts != cpu.DefaultPl2Watts;
+            }
+
+            return CpuPl1Watts != cpu.DefaultPl1Watts ||
+                   CpuPl2Watts != cpu.DefaultPl2Watts ||
+                   CpuTauSeconds != cpu.DefaultTauSeconds;
+        }
+    }
 
     public void ResetTuning()
     {
-        CpuPl1Watts = DefaultPl1Watts;
-        CpuPl2Watts = DefaultPl2Watts;
-        CpuTauSeconds = DefaultTauSeconds;
+        var platform = HardwarePlatformDetector.Current;
+        var cpu = platform.CpuProfile;
+
+        CpuPl1Watts = cpu.DefaultPl1Watts;
+        CpuPl2Watts = cpu.DefaultPl2Watts;
+        CpuTauSeconds = cpu.DefaultTauSeconds;
         Tpp250AutoBalance = true;
-        TppCpuSimultaneousWatts = DefaultTppCpuWatts;
+        TppCpuSimultaneousWatts = cpu.DefaultTppCpuWatts;
+
+        AmdUvOffset = 0;
+        AmdStapmWatts = platform.IsAmd ? cpu.DefaultPl1Watts : DefaultAmdStapmWatts;
+        AmdSlowWatts = platform.IsAmd ? cpu.DefaultPl1Watts : DefaultAmdSlowWatts;
+        AmdFastWatts = platform.IsAmd ? cpu.DefaultPl2Watts : DefaultAmdFastWatts;
+
         GpuClockCapMhz = 0;
         GpuCtgpEnabled = true;
         GpuDynamicBoostEnabled = true;
@@ -52,11 +97,34 @@ public sealed class AppSettings
 
     public void Normalize()
     {
-        CpuPl1Watts = Math.Clamp(CpuPl1Watts, MinCpuWatts, MaxCpuWatts);
-        CpuPl2Watts = Math.Clamp(CpuPl2Watts, MinCpuWatts, MaxCpuWatts);
+        var platform = HardwarePlatformDetector.Current;
+        var cpu = platform.CpuProfile;
+
+        CpuPl1Watts = Math.Clamp(CpuPl1Watts, cpu.MinWatts, cpu.MaxPl1Watts);
+        CpuPl2Watts = Math.Clamp(CpuPl2Watts, cpu.MinWatts, cpu.MaxPl2Watts);
         if (CpuPl2Watts < CpuPl1Watts) CpuPl2Watts = CpuPl1Watts;
+
         CpuTauSeconds = Math.Clamp(CpuTauSeconds, 1, 56);
-        TppCpuSimultaneousWatts = Math.Clamp(TppCpuSimultaneousWatts, 50, 110);
+        TppCpuSimultaneousWatts = Math.Clamp(
+            TppCpuSimultaneousWatts,
+            cpu.TppCpuMinWatts,
+            platform.EffectiveTppCpuMaxWatts);
+
+        AmdUvOffset = Math.Clamp(AmdUvOffset, MinAmdUvOffset, MaxAmdUvOffset);
+
+        if (platform.IsAmd)
+        {
+            AmdStapmWatts = CpuPl1Watts;
+            AmdSlowWatts = CpuPl1Watts;
+            AmdFastWatts = CpuPl2Watts;
+        }
+        else
+        {
+            AmdStapmWatts = Math.Clamp(AmdStapmWatts, MinAmdWatts, MaxAmdWatts);
+            AmdFastWatts = Math.Clamp(AmdFastWatts, MinAmdWatts, MaxAmdWatts);
+            AmdSlowWatts = Math.Clamp(AmdSlowWatts, MinAmdWatts, MaxAmdWatts);
+        }
+
         if (GpuClockCapMhz != 0) GpuClockCapMhz = Math.Clamp(GpuClockCapMhz, 1200, 2800);
     }
 }
@@ -90,7 +158,9 @@ public static class AppSettingsStore
             {
                 Log($"설정 읽기 실패: {ex.Message}");
             }
-            return new AppSettings();
+            var fresh = new AppSettings();
+            fresh.Normalize();
+            return fresh;
         }
     }
 

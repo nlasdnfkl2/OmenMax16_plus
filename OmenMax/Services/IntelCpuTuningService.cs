@@ -9,8 +9,8 @@ using System.Threading.Tasks;
 namespace OmenMax16.Services;
 
 /// <summary>
-/// Intel Core Ultra 9 275HX (Arrow Lake-HX, 15~160W) 전용 전력 제한(PL1/PL2/Tau) 및
-/// CPU+GPU 동시 게이밍 시 TPP 250W (CPU 80W + GPU 170W) 자동 전력 배분을 제어합니다.
+/// Intel Core Ultra HX (Arrow Lake-HX 275HX/255HX 및 2026 Refresh 290HX/270HX 등) 전용
+/// 전력 제한(PL1/PL2/Tau) 및 CPU+GPU 동시 게이밍 시 플랫폼 TPP 자동 전력 배분을 제어합니다.
 ///
 /// 제어 계층:
 ///  1. WinRing0x64.dll 기반 Intel RAPL MSR 0x610 (MSR_PKG_POWER_LIMIT) 직접 읽기/쓰기
@@ -23,12 +23,12 @@ public static class IntelCpuTuningService
 
     private static readonly object Sync = new();
 
-    private static int _targetPl1Watts = AppSettings.DefaultPl1Watts;
-    private static int _targetPl2Watts = AppSettings.DefaultPl2Watts;
-    private static int _targetTauSeconds = AppSettings.DefaultTauSeconds;
+    private static int _targetPl1Watts = HardwarePlatformDetector.Current.CpuProfile.DefaultPl1Watts;
+    private static int _targetPl2Watts = HardwarePlatformDetector.Current.CpuProfile.DefaultPl2Watts;
+    private static int _targetTauSeconds = HardwarePlatformDetector.Current.CpuProfile.DefaultTauSeconds;
 
-    private static int _effectivePl1Watts = AppSettings.DefaultPl1Watts;
-    private static int _effectivePl2Watts = AppSettings.DefaultPl2Watts;
+    private static int _effectivePl1Watts = HardwarePlatformDetector.Current.CpuProfile.DefaultPl1Watts;
+    private static int _effectivePl2Watts = HardwarePlatformDetector.Current.CpuProfile.DefaultPl2Watts;
     private static bool _isTpp250Throttled;
 
     private static volatile bool _stopped;
@@ -43,7 +43,7 @@ public static class IntelCpuTuningService
     public static int EffectivePl1Watts { get { lock (Sync) { return _effectivePl1Watts; } } }
     public static int EffectivePl2Watts { get { lock (Sync) { return _effectivePl2Watts; } } }
 
-    private static string _statusMessage = "Intel 275HX 게이밍 전력 제어 대기 중";
+    private static string _statusMessage = $"{HardwarePlatformDetector.Current.CpuShortName} 전력 제어 대기 중";
     public static string StatusMessage { get { lock (Sync) { return _statusMessage; } } }
 
     private static bool _olsInitialized;
@@ -94,7 +94,7 @@ public static class IntelCpuTuningService
             if (InitializeOls() && GetDllStatus() == 0)
             {
                 _olsInitialized = true;
-                Log("WinRing0x64 초기화 성공 (Intel RAPL MSR 0x610 접근 활성)");
+                Log($"WinRing0x64 초기화 성공 ({HardwarePlatformDetector.Current.CpuShortName} · RAPL MSR 0x610 활성)");
                 return true;
             }
 
@@ -113,7 +113,7 @@ public static class IntelCpuTuningService
     }
 
     /// <summary>
-    /// Intel Core Ultra 9 275HX 의 PL1/PL2/Tau(15~160W) 를 적용합니다.
+    /// 감지된 Intel CPU 모델의 허용 전력 범위 내에서 PL1 / PL2 / Tau 를 적용합니다.
     /// </summary>
     public static void ApplyTuning(
         int pl1Watts,
@@ -123,10 +123,11 @@ public static class IntelCpuTuningService
         bool tpp250AutoBalance = true,
         int tppCpuWatts = AppSettings.DefaultTppCpuWatts)
     {
+        var cpu = HardwarePlatformDetector.Current.CpuProfile;
         lock (Sync)
         {
-            _targetPl1Watts = Math.Clamp(pl1Watts, AppSettings.MinCpuWatts, AppSettings.MaxCpuWatts);
-            _targetPl2Watts = Math.Clamp(Math.Max(pl2Watts, _targetPl1Watts), AppSettings.MinCpuWatts, AppSettings.MaxCpuWatts);
+            _targetPl1Watts = Math.Clamp(pl1Watts, cpu.MinWatts, cpu.MaxPl1Watts);
+            _targetPl2Watts = Math.Clamp(Math.Max(pl2Watts, _targetPl1Watts), cpu.MinWatts, cpu.MaxPl2Watts);
             _targetTauSeconds = Math.Clamp(tauSeconds, 1, 56);
 
             ComputeEffectiveLimitsLocked(isGpuHeavy, tpp250AutoBalance, tppCpuWatts);
@@ -140,7 +141,7 @@ public static class IntelCpuTuningService
 
     /// <summary>
     /// 1초 모니터링 루프에서 호출합니다.
-    /// 1) RTX 5070 Ti(140~175W) 고부하 진입/이탈 시 TPP 250W CPU 상한을 자동 전환합니다.
+    /// 1) 외장 GPU 고부하 진입/이탈 시 모델별 TPP CPU 상한을 자동 전환합니다.
     /// 2) HP EC 펌웨어가 MSR 0x610 값을 덮어써서 실측 전력이 PL2를 연속 초과하면 재적용합니다.
     /// </summary>
     public static void CheckAndMaintain(
@@ -153,7 +154,6 @@ public static class IntelCpuTuningService
     {
         if (_stopped) return;
 
-        // GPU 고부하 판정 (히스테리시스: 3초 연속 고부하 시 진입, 6초 연속 유휴 시 해제)
         bool rawGpuHeavy = gpuActive && (gpuPowerWatts >= 55f || gpuUsagePercent >= 40f);
         if (rawGpuHeavy)
         {
@@ -167,6 +167,7 @@ public static class IntelCpuTuningService
         }
 
         bool stableGpuHeavy = _gpuHeavySamples >= 3;
+        int maxTpp = HardwarePlatformDetector.Current.MaxTppWatts;
 
         bool needApply = false;
         int effPl2;
@@ -182,7 +183,7 @@ public static class IntelCpuTuningService
             if (_effectivePl1Watts != prevPl1 || _effectivePl2Watts != prevPl2 || _isTpp250Throttled != prevTpp)
             {
                 needApply = true;
-                Log($"[TPP 250W 전환] GPU고부하={stableGpuHeavy} → CPU PL1={_effectivePl1Watts}W, PL2={_effectivePl2Watts}W");
+                Log($"[TPP {maxTpp}W 전환] GPU고부하={stableGpuHeavy} → CPU PL1={_effectivePl1Watts}W, PL2={_effectivePl2Watts}W");
             }
 
             effPl2 = _effectivePl2Watts;
@@ -211,9 +212,6 @@ public static class IntelCpuTuningService
         }
     }
 
-    /// <summary>
-    /// 현재 MSR 0x610 에서 실제 PL1 / PL2 한도를 읽어옵니다.
-    /// </summary>
     public static (float? Pl1Watts, float? Pl2Watts) ReadCurrentPowerLimits()
     {
         lock (Sync)
@@ -253,7 +251,10 @@ public static class IntelCpuTuningService
 
     private static void ComputeEffectiveLimitsLocked(bool isGpuHeavy, bool tpp250AutoBalance, int tppCpuWatts)
     {
-        int cappedCpu = Math.Clamp(tppCpuWatts, 50, 110);
+        var platform = HardwarePlatformDetector.Current;
+        var cpu = platform.CpuProfile;
+        int cappedCpu = Math.Clamp(tppCpuWatts, cpu.TppCpuMinWatts, platform.EffectiveTppCpuMaxWatts);
+
         if (tpp250AutoBalance && isGpuHeavy && (_targetPl1Watts > cappedCpu || _targetPl2Watts > cappedCpu))
         {
             _effectivePl1Watts = Math.Min(_targetPl1Watts, cappedCpu);
@@ -291,6 +292,8 @@ public static class IntelCpuTuningService
     {
         int pl1, pl2, tau;
         bool tppActive;
+        int maxTpp = HardwarePlatformDetector.Current.MaxTppWatts;
+
         lock (Sync)
         {
             pl1 = _effectivePl1Watts;
@@ -302,7 +305,6 @@ public static class IntelCpuTuningService
 
             try
             {
-                // 1. RAPL 단위 읽기 (MSR 0x606)
                 if (!Rdmsr(MsrRaplPowerUnit, out uint unitEax, out _))
                 {
                     SetStatus("MSR 0x606 읽기 실패");
@@ -314,7 +316,6 @@ public static class IntelCpuTuningService
                 double powerUnit = 1.0 / (1 << puExp);
                 double timeUnit = 1.0 / (1 << tuExp);
 
-                // 2. MSR 0x610 (PACKAGE_RAPL_LIMIT) 읽기 및 잠금 비트(63) 확인
                 if (!Rdmsr(MsrPkgPowerLimit, out uint curEax, out uint curEdx))
                 {
                     SetStatus("MSR 0x610 읽기 실패");
@@ -335,7 +336,6 @@ public static class IntelCpuTuningService
                     uint pl2Raw = (uint)Math.Clamp(Math.Round(pl2 / powerUnit), 1, 0x7FFF);
                     uint tauEncoded = EncodeRaplTimeWindow(tau, timeUnit);
 
-                    // Bit 15 = Enable, Bit 16 = Clamp, Bits [23:17] = Tau
                     uint newEax = (curEax & 0xFF000000u) | pl1Raw | (1u << 15) | (1u << 16) | (tauEncoded << 17);
                     uint newEdx = (curEdx & 0x7FFE0000u) | pl2Raw | (1u << 15) | (1u << 16);
 
@@ -344,7 +344,7 @@ public static class IntelCpuTuningService
                     {
                         double appliedPl1 = (verEax & 0x7FFF) * powerUnit;
                         double appliedPl2 = (verEdx & 0x7FFF) * powerUnit;
-                        string tppTag = tppActive ? " [TPP 250W 배분]" : "";
+                        string tppTag = tppActive ? $" [TPP {maxTpp}W 배분]" : "";
                         powerResult = $"PL1 {appliedPl1:0}W / PL2 {appliedPl2:0}W / {tau}s 적용 완료{tppTag}";
                         Log($"MSR 0x610 쓰기 성공: {powerResult}");
                     }
@@ -389,7 +389,7 @@ public static class IntelCpuTuningService
 
     private static void SetStatus(string msg)
     {
-        _statusMessage = msg;
+        lock (Sync) { _statusMessage = msg; }
     }
 
     private static void Log(string msg)

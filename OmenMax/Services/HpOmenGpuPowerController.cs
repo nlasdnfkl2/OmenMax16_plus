@@ -7,17 +7,16 @@ using System.IO;
 namespace OmenMax16.Services;
 
 /// <summary>
-/// GPU 전력 모드 (RTX 5070 Ti Laptop GPU 140~175W 대응).
-/// Ctgp=커스텀 TGP (140W -> 175W 확장), Ppab=다이내믹 부스트 (+35W),
+/// GPU 전력 모드 (RTX 5060/5070 115W · RTX 5070 Ti 140W · RTX 5080/5090 175W 등 모델별 자동 대응).
+/// Ctgp=커스텀 TGP 확장, Ppab=다이내믹 부스트,
 /// DState=전력 비율(1=100% 2=50% 3=25% 4=12.5%), PeakTemp=슬로다운 온도.
 /// </summary>
 public readonly record struct GpuPowerMode(bool Ctgp, bool Ppab, byte DState, byte PeakTemp)
 {
     public static GpuPowerMode Eco => new(false, false, 1, 75);
-    public static GpuPowerMode Base140W => new(false, false, 1, 87);
+    public static GpuPowerMode Base => new(false, false, 1, 87);
     public static GpuPowerMode Balanced => new(false, true, 1, 87);
     public static GpuPowerMode Performance => new(true, true, 1, 87);
-    public static GpuPowerMode Max175W => Performance;
 
     public byte[] ToBytes() => new byte[] { (byte)(Ctgp ? 1 : 0), (byte)(Ppab ? 1 : 0), DState, PeakTemp };
     public override string ToString() => $"cTGP={(Ctgp ? "ON" : "OFF")}, PPAB={(Ppab ? "ON" : "OFF")}, dState={DState}, peak={PeakTemp}";
@@ -88,6 +87,7 @@ public sealed class HpOmenGpuPowerController
         readback = null;
         requested = requested with { DState = (byte)Math.Clamp((int)requested.DState, 1, 4) };
         string lastError = "";
+        var platform = HardwarePlatformDetector.Current;
 
         foreach (var v in Order(SetVariants, _setOk))
         {
@@ -118,7 +118,10 @@ public sealed class HpOmenGpuPowerController
                 _setOk = v;
                 string note = now.DState != requested.DState
                     ? $" · dState {requested.DState} 요청은 반영되지 않음(현재 {now.DState})" : "";
-                string tgpLabel = (now.Ctgp && now.Ppab) ? "최대 175W" : (now.Ppab ? "140W+Boost" : "기본 140W");
+                int targetWatts = platform.CalculateGpuTargetWatts(now.Ctgp, now.Ppab);
+                string tgpLabel = (now.Ctgp && now.Ppab)
+                    ? $"최대 {targetWatts}W"
+                    : (now.Ppab ? $"{targetWatts}W (+Boost)" : $"기본 {targetWatts}W");
                 message = $"GPU 전력 모드 적용 완료 ({tgpLabel} · cTGP={(now.Ctgp ? "ON" : "OFF")}, PPAB={(now.Ppab ? "ON" : "OFF")}){note}";
                 Log($"SET 성공 in={v.In} out={v.Out} 읽기={now}{note}");
                 return true;

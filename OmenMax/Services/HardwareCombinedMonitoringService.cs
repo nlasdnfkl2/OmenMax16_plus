@@ -5,6 +5,7 @@ using OmenMax16.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace OmenMax16.Services;
@@ -16,6 +17,17 @@ public sealed class HardwareCombinedMonitoringService : IDisposable
     private bool _sensorInitialized;
     private string _sensorInitializationError = string.Empty;
     private int _consecutiveErrors = 0;
+
+    // Windows 커널 PDH 유효 클럭 카운터 (Arrow Lake 275HX의 IA32_PERF_STATUS 5.15GHz 고정 우회)
+    private IntPtr _pdhQuery = IntPtr.Zero;
+    private IntPtr _pdhPerfCounter = IntPtr.Zero;
+    private IntPtr _pdhFreqCounter = IntPtr.Zero;
+    private bool _pdhInitialized;
+    private bool _pdhFailed;
+
+    private const uint PdhFmtDouble = 0x00000200;
+    private const uint PdhCstatusValidData = 0x00000000;
+    private const uint PdhCstatusNewData = 0x00000001;
 
     private const int MaxConsecutiveErrorsBeforeReset = 10;
     private const int MaxGlitchTolerance = 10;
@@ -45,6 +57,28 @@ public sealed class HardwareCombinedMonitoringService : IDisposable
     private int _voltageGlitchCount = 0;
     private int _voltageDipCount = 0;
     private const int MaxVoltageDipHold = 5;
+
+    [StructLayout(LayoutKind.Explicit, Size = 16)]
+    private struct PdhFmtCounterValue
+    {
+        [FieldOffset(0)] public uint CStatus;
+        [FieldOffset(8)] public double DoubleValue;
+    }
+
+    [DllImport("pdh.dll", ExactSpelling = true)]
+    private static extern uint PdhOpenQueryW(IntPtr szDataSource, IntPtr dwUserData, out IntPtr phQuery);
+
+    [DllImport("pdh.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+    private static extern uint PdhAddEnglishCounterW(IntPtr hQuery, string szFullCounterPath, IntPtr dwUserData, out IntPtr phCounter);
+
+    [DllImport("pdh.dll", ExactSpelling = true)]
+    private static extern uint PdhCollectQueryData(IntPtr hQuery);
+
+    [DllImport("pdh.dll", ExactSpelling = true)]
+    private static extern uint PdhGetFormattedCounterValue(IntPtr hCounter, uint dwFormat, out uint lpdwType, out PdhFmtCounterValue pValue);
+
+    [DllImport("pdh.dll", ExactSpelling = true)]
+    private static extern uint PdhCloseQuery(IntPtr hQuery);
 
     public (CpuStatus Cpu, GpuStatus Gpu) ReadStatus(bool enableGpuMonitoring)
     {
@@ -115,11 +149,11 @@ public sealed class HardwareCombinedMonitoringService : IDisposable
 
                 _consecutiveErrors = 0;
 
-                // CPU 데이터 정제 (Intel Core Ultra 9 275HX / 범용 지원)
+                // CPU 데이터 정제 (Intel Core Ultra HX / AMD Ryzen AI 300·400 지원)
                 cpuStatus.IsHardwareSensorAvailable = true;
                 ProcessCpuSensors(cpuSensors, cpuStatus);
 
-                // GPU 데이터 정제 (RTX 5070 Ti 140~175W TGP 지원)
+                // GPU 데이터 정제 (RTX 5060 ~ 5090 지원)
                 if (enableGpuMonitoring && gpuCandidates.Count > 0)
                 {
                     GpuCandidate selectedGpu = SelectCandidate(gpuCandidates);
@@ -190,15 +224,105 @@ public sealed class HardwareCombinedMonitoringService : IDisposable
         }
     }
 
+    private void EnsurePdhInitialized()
+    {
+        if (_pdhInitialized || _pdhFailed) return;
+
+        IntPtr query = IntPtr.Zero;
+        try
+        {
+            if (PdhOpenQueryW(IntPtr.Zero, IntPtr.Zero, out query) != 0 || query == IntPtr.Zero)
+            {
+                _pdhFailed = true;
+                return;
+            }
+
+            if (PdhAddEnglishCounterW(query, @"\Processor Information(_Total)\% Processor Performance", IntPtr.Zero, out IntPtr perfCounter) != 0 ||
+                PdhAddEnglishCounterW(query, @"\Processor Information(_Total)\Processor Frequency", IntPtr.Zero, out IntPtr freqCounter) != 0)
+            {
+                PdhCloseQuery(query);
+                _pdhFailed = true;
+                return;
+            }
+
+            PdhCollectQueryData(query);
+
+            _pdhQuery = query;
+            _pdhPerfCounter = perfCounter;
+            _pdhFreqCounter = freqCounter;
+            _pdhInitialized = true;
+        }
+        catch
+        {
+            if (query != IntPtr.Zero)
+            {
+                try { PdhCloseQuery(query); } catch { }
+            }
+            _pdhFailed = true;
+        }
+    }
+
+    private float? ReadPdhEffectiveClockMHz()
+    {
+        EnsurePdhInitialized();
+        if (!_pdhInitialized || _pdhQuery == IntPtr.Zero) return null;
+
+        try
+        {
+            if (PdhCollectQueryData(_pdhQuery) != 0) return null;
+
+            uint s1 = PdhGetFormattedCounterValue(_pdhPerfCounter, PdhFmtDouble, out _, out PdhFmtCounterValue perfVal);
+            uint s2 = PdhGetFormattedCounterValue(_pdhFreqCounter, PdhFmtDouble, out _, out PdhFmtCounterValue freqVal);
+
+            if (s1 != 0 || s2 != 0) return null;
+            if (perfVal.CStatus is not (PdhCstatusValidData or PdhCstatusNewData)) return null;
+            if (freqVal.CStatus is not (PdhCstatusValidData or PdhCstatusNewData)) return null;
+
+            double baseMhz = freqVal.DoubleValue;
+            double perfPct = perfVal.DoubleValue;
+            if (baseMhz <= 100.0 || perfPct <= 1.0) return null;
+
+            double effectiveMhz = baseMhz * (perfPct / 100.0);
+            return effectiveMhz is > 100.0 and <= 6500.0 ? (float)effectiveMhz : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void ClosePdhQuery()
+    {
+        if (_pdhQuery != IntPtr.Zero)
+        {
+            try { PdhCloseQuery(_pdhQuery); } catch { }
+            _pdhQuery = IntPtr.Zero;
+        }
+        _pdhPerfCounter = IntPtr.Zero;
+        _pdhFreqCounter = IntPtr.Zero;
+        _pdhInitialized = false;
+        _pdhFailed = false;
+    }
+
     private void ResetSensorSession()
     {
         try { _computer?.Close(); }
         catch { }
-        finally { _computer = null; _sensorInitialized = false; _consecutiveErrors = 0; }
+        finally
+        {
+            _computer = null;
+            _sensorInitialized = false;
+            _consecutiveErrors = 0;
+            ClosePdhQuery();
+        }
     }
 
     private void ProcessCpuSensors(List<ISensor> cpuSensors, CpuStatus status)
     {
+        bool isAmd = HardwarePlatformDetector.Current.IsAmd;
+        AmdCpuTuningService.OmenAmdCpuTelemetry bridgeTelemetry = default;
+        bool hasBridge = isAmd && AmdCpuTuningService.TryReadBridgeTelemetry(out bridgeTelemetry);
+
         // 1. CPU 사용량
         float? rawUsage = Math.Clamp(
             cpuSensors.FirstOrDefault(v => v.SensorType == SensorType.Load && v.Name.Contains("CPU Total", StringComparison.OrdinalIgnoreCase))?.Value ?? 0f,
@@ -206,14 +330,16 @@ public sealed class HardwareCombinedMonitoringService : IDisposable
         if (rawUsage > 0f || _usageGlitchCount >= 3) { _lastValidUsage = rawUsage ?? 0f; _usageGlitchCount = 0; } else _usageGlitchCount++;
         status.UsagePercent = _usageGlitchCount <= MaxGlitchTolerance ? _lastValidUsage : 0f;
 
-        // 2. CPU 온도 (전체 코어 평균 기반 + 활성화된 코어에 소폭 가중치 부여)
-        float? rawTemp = CalculateWeightedAverageCpuTemperature(cpuSensors, out string tempSource);
+        // 2. CPU 온도 (AMD: Tctl/Tdie 우선 / Intel: 전체 코어 평균 기반 + 활성화된 코어에 소폭 가중치 부여)
+        float? rawTemp = isAmd
+            ? CalculateAmdCpuTemperature(cpuSensors, hasBridge, bridgeTelemetry, out string tempSource)
+            : CalculateWeightedAverageCpuTemperature(cpuSensors, out tempSource);
         status.TemperatureSource = tempSource;
 
         if (rawTemp > 0f) { _lastValidTemp = rawTemp.Value; _tempGlitchCount = 0; } else _tempGlitchCount++;
         status.TemperatureCelsius = _tempGlitchCount <= MaxGlitchTolerance ? _lastValidTemp : null;
 
-        // 3. CPU 클럭 (Intel 275HX 8P+16E 구조에서는 E-코어 유휴 클럭에 희석되지 않도록 Core Max / Average 우선)
+        // 3. CPU 클럭 (Windows 커널 PDH APERF/MPERF 유효 클럭 우선 -> LHM 평균/최대 폴백)
         var coreClocks = cpuSensors
             .Where(v => v.SensorType == SensorType.Clock
                      && v.Name.Contains("Core", StringComparison.OrdinalIgnoreCase)
@@ -221,15 +347,30 @@ public sealed class HardwareCombinedMonitoringService : IDisposable
                      && v.Value is > 100f and <= 6500f)
             .ToList();
 
-        float? rawClock =
-            cpuSensors.FirstOrDefault(v => v.SensorType == SensorType.Clock && v.Name.Contains("Core Max", StringComparison.OrdinalIgnoreCase) && v.Value > 100f)?.Value
-            ?? cpuSensors.FirstOrDefault(v => v.SensorType == SensorType.Clock && v.Name.Contains("Average", StringComparison.OrdinalIgnoreCase) && v.Value > 100f)?.Value
-            ?? (coreClocks.Count > 0 ? coreClocks.Max(v => v.Value) : null);
+        float? pdhEffectiveClock = ReadPdhEffectiveClockMHz();
+
+        float? rawClock;
+        if (isAmd)
+        {
+            rawClock = (hasBridge && bridgeTelemetry.AverageEffectiveClockMHz > 100 ? (float?)bridgeTelemetry.AverageEffectiveClockMHz : null)
+                ?? pdhEffectiveClock
+                ?? cpuSensors.FirstOrDefault(v => v.SensorType == SensorType.Clock && v.Name.Contains("Average", StringComparison.OrdinalIgnoreCase) && v.Value > 100f)?.Value
+                ?? (coreClocks.Count > 0 ? coreClocks.Average(v => v.Value) : null);
+            status.ClockSource = pdhEffectiveClock.HasValue ? "Windows PDH 유효 클럭" : "LibreHardwareMonitor";
+        }
+        else
+        {
+            rawClock = pdhEffectiveClock
+                ?? cpuSensors.FirstOrDefault(v => v.SensorType == SensorType.Clock && v.Name.Contains("Average", StringComparison.OrdinalIgnoreCase) && v.Value > 100f)?.Value
+                ?? (coreClocks.Count > 0 ? coreClocks.Average(v => v.Value) : null)
+                ?? cpuSensors.FirstOrDefault(v => v.SensorType == SensorType.Clock && v.Name.Contains("Core Max", StringComparison.OrdinalIgnoreCase) && v.Value > 100f)?.Value;
+            status.ClockSource = pdhEffectiveClock.HasValue ? "Windows PDH 유효 클럭 (APERF/MPERF)" : "LibreHardwareMonitor (폴백)";
+        }
 
         if (rawClock > 0f) { _lastValidClock = rawClock.Value; _clockGlitchCount = 0; } else _clockGlitchCount++;
         status.ClockMHz = _clockGlitchCount <= MaxGlitchTolerance ? _lastValidClock : null;
 
-        // 4. CPU 전력 (Intel 275HX "CPU Package" 15~160W+ 지원)
+        // 4. CPU 전력 (Intel "CPU Package" / AMD "Package", "PPT")
         float? rawPower = cpuSensors.FirstOrDefault(v =>
             v.SensorType == SensorType.Power &&
             (v.Name.Contains("CPU Package", StringComparison.OrdinalIgnoreCase) ||
@@ -242,54 +383,97 @@ public sealed class HardwareCombinedMonitoringService : IDisposable
             rawPower = powerSensors.Count > 0 ? powerSensors.Max(v => v.Value) : 0f;
         }
 
+        if ((rawPower is null or <= 0f) && hasBridge && bridgeTelemetry.PPTValueWatts > 0)
+        {
+            rawPower = (float)bridgeTelemetry.PPTValueWatts;
+        }
+
         if (rawPower is > 0f and <= 250f) { _lastValidPower = rawPower.Value; _powerGlitchCount = 0; } else _powerGlitchCount++;
         status.PowerWatts = _powerGlitchCount <= MaxGlitchTolerance ? _lastValidPower : null;
 
-        // 5. CPU 전압 (Intel Core Ultra 9 275HX: 공유 IA Vcore 레일은 최고 활성 VID 를 따르므로 C-State 0.6V 딥 희석 방지)
-        float? rawVoltage = cpuSensors
-            .FirstOrDefault(v => v.SensorType == SensorType.Voltage
-                              && (v.Name.Equals("CPU Core", StringComparison.OrdinalIgnoreCase) ||
-                                  v.Name.Equals("Vcore", StringComparison.OrdinalIgnoreCase) ||
-                                  v.Name.Equals("Core Max", StringComparison.OrdinalIgnoreCase))
-                              && v.Value is >= 0.3f and <= 1.75f)?.Value;
+        // 5. CPU 전압
+        float? rawVoltage = null;
 
-        if (rawVoltage is null)
+        if (isAmd)
         {
-            var vidSensors = cpuSensors
-                .Where(v => v.SensorType == SensorType.Voltage
-                         && Regex.IsMatch(v.Name, @"(Core\s*#?\s*\d+\s*VID|VID\s*#?\s*\d+)", RegexOptions.IgnoreCase)
-                         && v.Value is >= 0.3f and <= 1.75f)
-                .ToList();
+            rawVoltage = AmdCpuTuningService.LastCoreVoltage;
 
-            if (vidSensors.Count > 0)
+            if (rawVoltage is null or < 0.3f or > 1.75f)
             {
-                // 유휴 C-State 코어(0.6V대)가 평균을 끌어내리지 않도록 활성 코어 최고 VID 사용
-                rawVoltage = vidSensors.Max(v => v.Value ?? 0f);
+                var coreSvi2 = cpuSensors.FirstOrDefault(v =>
+                    v.SensorType == SensorType.Voltage
+                    && v.Name.Equals("Core (SVI2 TFN)", StringComparison.OrdinalIgnoreCase));
+
+                var perCoreVid = cpuSensors
+                    .Where(v => v.SensorType == SensorType.Voltage
+                             && Regex.IsMatch(v.Name, @"^Core\s*#\s*\d+\s*VID$", RegexOptions.IgnoreCase)
+                             && (v.Value ?? 0f) > 0.05f)
+                    .ToList();
+
+                if (coreSvi2?.Value != null && perCoreVid.Count > 0)
+                {
+                    float diff = coreSvi2.Value.Value - perCoreVid.Average(v => v.Value ?? 0f);
+                    rawVoltage = diff is >= 0.3f and <= 1.75f ? diff : coreSvi2.Value.Value;
+                }
+                else if (coreSvi2?.Value is >= 0.3f and <= 1.75f)
+                {
+                    rawVoltage = coreSvi2.Value.Value;
+                }
+            }
+
+            if ((rawVoltage is null or < 0.3f or > 1.75f) && hasBridge && bridgeTelemetry.AverageCoreVoltageVolts is >= 0.3 and <= 1.75)
+            {
+                rawVoltage = (float)bridgeTelemetry.AverageCoreVoltageVolts;
             }
         }
-
-        if (rawVoltage is null)
+        else
         {
-            var coreSvi2 = cpuSensors.FirstOrDefault(v =>
-                v.SensorType == SensorType.Voltage
-                && v.Name.Equals("Core (SVI2 TFN)", StringComparison.OrdinalIgnoreCase));
+            // Intel Core Ultra 9 275HX: 공유 IA Vcore 레일은 최고 활성 VID 를 따르므로 C-State 0.6V 딥 희석 방지
+            rawVoltage = cpuSensors
+                .FirstOrDefault(v => v.SensorType == SensorType.Voltage
+                                  && (v.Name.Equals("CPU Core", StringComparison.OrdinalIgnoreCase) ||
+                                      v.Name.Equals("Vcore", StringComparison.OrdinalIgnoreCase) ||
+                                      v.Name.Equals("Core Max", StringComparison.OrdinalIgnoreCase))
+                                  && v.Value is >= 0.3f and <= 1.75f)?.Value;
 
-            var perCoreVid = cpuSensors
-                .Where(v => v.SensorType == SensorType.Voltage
-                         && Regex.IsMatch(v.Name, @"^Core\s*#\s*\d+\s*VID$", RegexOptions.IgnoreCase)
-                         && (v.Value ?? 0f) > 0.05f)
-                .ToList();
-
-            if (coreSvi2?.Value != null && perCoreVid.Count > 0)
+            if (rawVoltage is null)
             {
-                rawVoltage = coreSvi2.Value.Value - perCoreVid.Average(v => v.Value ?? 0f);
+                var vidSensors = cpuSensors
+                    .Where(v => v.SensorType == SensorType.Voltage
+                             && Regex.IsMatch(v.Name, @"(Core\s*#?\s*\d+\s*VID|VID\s*#?\s*\d+)", RegexOptions.IgnoreCase)
+                             && v.Value is >= 0.3f and <= 1.75f)
+                    .ToList();
+
+                if (vidSensors.Count > 0)
+                {
+                    // 유휴 C-State 코어(0.6V대)가 평균을 끌어내리지 않도록 활성 코어 최고 VID 사용
+                    rawVoltage = vidSensors.Max(v => v.Value ?? 0f);
+                }
+            }
+
+            if (rawVoltage is null)
+            {
+                var coreSvi2 = cpuSensors.FirstOrDefault(v =>
+                    v.SensorType == SensorType.Voltage
+                    && v.Name.Equals("Core (SVI2 TFN)", StringComparison.OrdinalIgnoreCase));
+
+                var perCoreVid = cpuSensors
+                    .Where(v => v.SensorType == SensorType.Voltage
+                             && Regex.IsMatch(v.Name, @"^Core\s*#\s*\d+\s*VID$", RegexOptions.IgnoreCase)
+                             && (v.Value ?? 0f) > 0.05f)
+                    .ToList();
+
+                if (coreSvi2?.Value != null && perCoreVid.Count > 0)
+                {
+                    rawVoltage = coreSvi2.Value.Value - perCoreVid.Average(v => v.Value ?? 0f);
+                }
             }
         }
 
         if (rawVoltage is >= 0.3f and <= 1.75f)
         {
             bool isCpuActive = (status.ClockMHz ?? 0f) > 1500f || (status.UsagePercent ?? 0f) > 1.5f || (status.PowerWatts ?? 0f) > 10f;
-            bool isTransientLowDip = rawVoltage.Value < 0.85f && _lastValidVoltage >= 0.95f && isCpuActive;
+            bool isTransientLowDip = !isAmd && rawVoltage.Value < 0.85f && _lastValidVoltage >= 0.95f && isCpuActive;
 
             if (isTransientLowDip && _voltageDipCount < MaxVoltageDipHold)
             {
@@ -307,6 +491,44 @@ public sealed class HardwareCombinedMonitoringService : IDisposable
             _voltageGlitchCount++;
         }
         status.VoltageVolts = _voltageGlitchCount <= MaxGlitchTolerance ? _lastValidVoltage : null;
+    }
+
+    private static float? CalculateAmdCpuTemperature(
+        List<ISensor> cpuSensors,
+        bool hasBridge,
+        AmdCpuTuningService.OmenAmdCpuTelemetry bridge,
+        out string source)
+    {
+        var validTempSensors = cpuSensors
+            .Where(v => v.SensorType == SensorType.Temperature
+                     && !v.Name.Contains("Distance", StringComparison.OrdinalIgnoreCase)
+                     && !v.Name.Contains("TjMax", StringComparison.OrdinalIgnoreCase)
+                     && v.Value is > 0f and <= 125f)
+            .ToList();
+
+        float? tctl = validTempSensors
+            .FirstOrDefault(v => v.Name.Contains("Tctl", StringComparison.OrdinalIgnoreCase) ||
+                                 v.Name.Contains("Tdie", StringComparison.OrdinalIgnoreCase))?.Value;
+        if (tctl.HasValue)
+        {
+            source = "AMD Tctl/Tdie";
+            return tctl.Value;
+        }
+
+        if (validTempSensors.Count > 0)
+        {
+            source = "AMD 최대 온도 센서";
+            return validTempSensors.Max(v => v.Value!.Value);
+        }
+
+        if (hasBridge && bridge.TemperatureCelsius is > 0 and <= 125)
+        {
+            source = "Ryzen Master SDK";
+            return (float)bridge.TemperatureCelsius;
+        }
+
+        source = "CPU 온도 센서 없음";
+        return null;
     }
 
     /// <summary>
@@ -461,7 +683,7 @@ public sealed class HardwareCombinedMonitoringService : IDisposable
     private static float? NormalizeTemperature(float? value) => value is >= -20f and <= 130f ? value : null;
     private static float? NormalizeLoad(float? value) => value is >= 0f and <= 100f ? value : null;
     private static float? NormalizeClockMHz(float? raw) { if (!raw.HasValue) return null; float v = raw.Value > 100000f ? raw.Value / 1000000f : raw.Value; return v <= 5000f ? v : null; }
-    // RTX 5070 Ti (140~175W + 피크 스파이크) 허용 상한을 250W로 상향
+    // RTX 5060 ~ 5090 (115~175W + 피크 스파이크) 허용 상한 250W
     private static float? NormalizeGpuPowerWatts(float? raw) { if (!raw.HasValue) return null; float v = raw.Value > 100000f ? raw.Value / 1000000f : raw.Value; return v <= 250f ? v : null; }
     private static float? NormalizeFanRpm(float? value) => value is >= 0f and <= 20000f ? value : null;
 

@@ -121,6 +121,7 @@ public partial class FormMain : Form
 {
     private static readonly bool UseQuietAutoCurve = true;
 
+    private readonly HardwarePlatformInfo _platform = HardwarePlatformDetector.Current;
     private HardwareCombinedMonitoringService? _hwMonitor;
     private BatteryMonitoringService? _battery;
 
@@ -199,17 +200,18 @@ public partial class FormMain : Form
     private PerformanceProfile _lastAcPowerProfile = PerformanceProfile.Balanced;
     private bool _isBatteryLimitActive = false;
     private bool _gpuDynamicBoost = true;
-    private int _gpuModeWatts = 175;
+    private int _gpuModeWatts;
     private int? _gpuCommandedWatts;
     private string _gpuModeStatus = "GPU 대기 중";
-    private string _lastCpuTuningStatus = "Intel 275HX 게이밍 전력 제어 준비됨";
+    private string _lastCpuTuningStatus = "";
 
-    // Intel Core Ultra 9 275HX (15~160W) + TPP 250W (80W + 170W) 게이밍 상태
-    private int _cpuPl1Watts = AppSettings.DefaultPl1Watts;
-    private int _cpuPl2Watts = AppSettings.DefaultPl2Watts;
-    private int _cpuTauSeconds = AppSettings.DefaultTauSeconds;
+    // 감지된 CPU/GPU 모델별 전력 제어 상태 (Intel: PL1/PL2/Tau, AMD: STAPM·Slow/Fast/CO)
+    private int _cpuPl1Watts;
+    private int _cpuPl2Watts;
+    private int _cpuTauSeconds;
+    private int _amdUvOffset;
     private bool _tpp250AutoBalance = true;
-    private int _tppCpuSimultaneousWatts = AppSettings.DefaultTppCpuWatts;
+    private int _tppCpuSimultaneousWatts;
 
     [DllImport("user32.dll")] private static extern ushort ReleaseCapture();
     [DllImport("user32.dll")] private static extern uint SendMessage(IntPtr hWnd, uint msg, uint wp, uint lp);
@@ -237,8 +239,7 @@ public partial class FormMain : Form
     }
 
     /// <summary>
-    /// NVIDIA GeForce RTX 5070 Ti Laptop GPU(및 모든 NVIDIA 외장 GPU)를 절전 슬립(D3cold) 상태에서
-    /// 깨우지 않고 D0 활성 상태 여부만 SetupAPI 장치 전원 속성으로 패시브 조회합니다.
+    /// NVIDIA 외장 GPU를 절전 슬립(D3cold) 상태에서 깨우지 않고 D0 활성 상태 여부만 SetupAPI로 패시브 조회합니다.
     /// </summary>
     private static class PassiveNvidiaGpuPowerState
     {
@@ -308,13 +309,20 @@ public partial class FormMain : Form
     public FormMain()
     {
         InitializeComponent();
+        _cpuPl1Watts = _platform.CpuProfile.DefaultPl1Watts;
+        _cpuPl2Watts = _platform.CpuProfile.DefaultPl2Watts;
+        _cpuTauSeconds = _platform.CpuProfile.DefaultTauSeconds;
+        _tppCpuSimultaneousWatts = _platform.CpuProfile.DefaultTppCpuWatts;
+        _gpuModeWatts = _platform.GpuProfile.MaxWatts;
+        _lastCpuTuningStatus = $"{_platform.CpuShortName} 전력 제어 준비됨";
+
         _fanController = new HpOmenFanController(_biosTransport);
         _gpuPower = new HpOmenGpuPowerController(_biosTransport);
         _fanSupported = _fanController.IsAvailable(out string fanAvailabilityMessage);
         if (!_fanSupported) _fanError = $"팬 인터페이스 미지원: {fanAvailabilityMessage}";
         LoadSavedCurves();
         InitPersistedSettings();
-        Text = "OMEN MAX 16";
+        Text = _platform.PlatformFamily;
         ClientSize = new Size(720, 560);
         MinimumSize = Size; MaximumSize = Size;
         FormBorderStyle = FormBorderStyle.None;
@@ -512,11 +520,19 @@ public partial class FormMain : Form
                 PostToWeb(new
                 {
                     cmd = "OPEN_CPU_POWER_MODAL",
+                    cpuVendor = _platform.PlatformKey,
                     pl1 = _cpuPl1Watts,
                     pl2 = _cpuPl2Watts,
                     tau = _cpuTauSeconds,
+                    amdUvOffset = _amdUvOffset,
                     tpp250AutoBalance = _tpp250AutoBalance,
                     tppCpuWatts = _tppCpuSimultaneousWatts,
+                    cpuMinWatts = _platform.CpuProfile.MinWatts,
+                    cpuMaxPl1Watts = _platform.CpuProfile.MaxPl1Watts,
+                    cpuMaxPl2Watts = _platform.CpuProfile.MaxPl2Watts,
+                    tppCpuMinWatts = _platform.CpuProfile.TppCpuMinWatts,
+                    tppCpuMaxWatts = _platform.EffectiveTppCpuMaxWatts,
+                    maxTppWatts = _platform.MaxTppWatts,
                     status = _lastCpuTuningStatus
                 });
                 break;
@@ -524,9 +540,11 @@ public partial class FormMain : Form
             case "SAVE_CPU_UV":
                 if (root.TryGetProperty("payload", out var cpuProp) && cpuProp.ValueKind == JsonValueKind.Object)
                 {
+                    var cpuProf = _platform.CpuProfile;
                     int pl1 = cpuProp.TryGetProperty("pl1", out var pl1P) && pl1P.TryGetInt32(out int p1v) ? p1v : _cpuPl1Watts;
                     int pl2 = cpuProp.TryGetProperty("pl2", out var pl2P) && pl2P.TryGetInt32(out int p2v) ? p2v : _cpuPl2Watts;
                     int tau = cpuProp.TryGetProperty("tau", out var tauP) && tauP.TryGetInt32(out int tv) ? tv : _cpuTauSeconds;
+                    int uvOffset = cpuProp.TryGetProperty("amdUvOffset", out var uvP) && uvP.TryGetInt32(out int uvv) ? uvv : _amdUvOffset;
                     bool tppAuto = cpuProp.TryGetProperty("tpp250AutoBalance", out var tppP) &&
                         (tppP.ValueKind == JsonValueKind.True || tppP.ValueKind == JsonValueKind.False)
                         ? tppP.GetBoolean()
@@ -535,33 +553,52 @@ public partial class FormMain : Form
                         ? twv
                         : _tppCpuSimultaneousWatts;
 
-                    _cpuPl1Watts = Math.Clamp(pl1, AppSettings.MinCpuWatts, AppSettings.MaxCpuWatts);
-                    _cpuPl2Watts = Math.Clamp(Math.Max(pl2, _cpuPl1Watts), AppSettings.MinCpuWatts, AppSettings.MaxCpuWatts);
+                    _cpuPl1Watts = Math.Clamp(pl1, cpuProf.MinWatts, cpuProf.MaxPl1Watts);
+                    _cpuPl2Watts = Math.Clamp(Math.Max(pl2, _cpuPl1Watts), cpuProf.MinWatts, cpuProf.MaxPl2Watts);
                     _cpuTauSeconds = Math.Clamp(tau, 1, 56);
+                    _amdUvOffset = Math.Clamp(uvOffset, AppSettings.MinAmdUvOffset, AppSettings.MaxAmdUvOffset);
                     _tpp250AutoBalance = tppAuto;
-                    _tppCpuSimultaneousWatts = Math.Clamp(tppCpuW, 50, 110);
+                    _tppCpuSimultaneousWatts = Math.Clamp(tppCpuW, cpuProf.TppCpuMinWatts, _platform.EffectiveTppCpuMaxWatts);
 
                     bool gpuHeavyNow;
                     lock (_stateLock)
                     {
-                        gpuHeavyNow = _gpuActive && ((_lastGpu.PowerWatts ?? 0f) >= 55f || (_lastGpu.UsagePercent ?? 0f) >= 40f);
+                        float thresholdW = _platform.IsAmd ? 45f : 55f;
+                        gpuHeavyNow = _gpuActive && ((_lastGpu.PowerWatts ?? 0f) >= thresholdW || (_lastGpu.UsagePercent ?? 0f) >= 40f);
                     }
 
                     PersistSettings();
                     SendUIRefresh();
 
-                    int snapPl1 = _cpuPl1Watts, snapPl2 = _cpuPl2Watts, snapTau = _cpuTauSeconds, snapTppCpu = _tppCpuSimultaneousWatts;
+                    int snapPl1 = _cpuPl1Watts, snapPl2 = _cpuPl2Watts, snapTau = _cpuTauSeconds, snapTppCpu = _tppCpuSimultaneousWatts, snapUv = _amdUvOffset;
                     bool snapTppAuto = _tpp250AutoBalance;
+                    bool isAmd = _platform.IsAmd;
+
                     _ = Task.Run(() =>
                     {
-                        IntelCpuTuningService.ApplyTuning(
-                            snapPl1,
-                            snapPl2,
-                            snapTau,
-                            gpuHeavyNow,
-                            snapTppAuto,
-                            snapTppCpu);
-                        _lastCpuTuningStatus = IntelCpuTuningService.StatusMessage;
+                        if (isAmd)
+                        {
+                            AmdCpuTuningService.ApplyPowerLimits(
+                                snapPl1,
+                                snapPl2,
+                                gpuHeavyNow,
+                                snapTppAuto,
+                                snapTppCpu,
+                                snapUv);
+                            _lastCpuTuningStatus = AmdCpuTuningService.StatusMessage;
+                        }
+                        else
+                        {
+                            IntelCpuTuningService.ApplyTuning(
+                                snapPl1,
+                                snapPl2,
+                                snapTau,
+                                gpuHeavyNow,
+                                snapTppAuto,
+                                snapTppCpu);
+                            _lastCpuTuningStatus = IntelCpuTuningService.StatusMessage;
+                        }
+
                         if (Visible && !_closing)
                         {
                             try { BeginInvoke(new Action(SendUIRefresh)); } catch { }
@@ -718,7 +755,7 @@ public partial class FormMain : Form
             BatteryCharging: snapBattery.IsCharging,
             PowerProfileLabel: profileLabel,
             RefreshRateHz: GetCurrentDisplayRefreshRate(),
-            GpuPresent: GpuPowerEnforcer.IsGpuPresent(),
+            GpuPresent: _platform.HasDiscreteGpu || GpuPowerEnforcer.IsGpuPresent(),
             GpuEnabled: GpuPowerEnforcer.IsGpuEnabled(),
             GpuModeStatus: currentGpuStatus,
             GpuRequestedWatts: currentGpuWatts
@@ -769,7 +806,7 @@ public partial class FormMain : Form
         {
             _gpuClockCapMhz = mhz;
             if (mhz is null) _gpuClockCapAppliedMhz = null;
-            if (_gpuModeWatts < 0) _gpuModeWatts = (_gpuCtgp && _gpuDynamicBoost) ? 175 : 140;
+            if (_gpuModeWatts < 0) _gpuModeWatts = _platform.CalculateGpuTargetWatts(_gpuCtgp, _gpuDynamicBoost);
             _clockCapFailCount = 0;
             _gpuModeStatus = "적용 중...";
         }
@@ -803,6 +840,7 @@ public partial class FormMain : Form
             if (systemForced) s.ResetTuning();
         }
 
+        s.Normalize();
         s.SessionActive = true;
         s.LastActiveUtc = DateTime.UtcNow;
         AppSettingsStore.Save(s);
@@ -811,20 +849,36 @@ public partial class FormMain : Form
         _cpuPl1Watts = s.CpuPl1Watts;
         _cpuPl2Watts = s.CpuPl2Watts;
         _cpuTauSeconds = s.CpuTauSeconds;
+        _amdUvOffset = s.AmdUvOffset;
         _tpp250AutoBalance = s.Tpp250AutoBalance;
         _tppCpuSimultaneousWatts = s.TppCpuSimultaneousWatts;
         _gpuClockCapMhz = s.GpuClockCapMhz > 0 ? s.GpuClockCapMhz : null;
         _gpuCtgp = s.GpuCtgpEnabled;
         _gpuDynamicBoost = s.GpuDynamicBoostEnabled;
-        _gpuModeWatts = (_gpuCtgp && _gpuDynamicBoost) ? 175 : (_gpuDynamicBoost ? 155 : 140);
+        _gpuModeWatts = _platform.CalculateGpuTargetWatts(_gpuCtgp, _gpuDynamicBoost);
 
-        IntelCpuTuningService.ApplyTuning(
-            _cpuPl1Watts,
-            _cpuPl2Watts,
-            _cpuTauSeconds,
-            isGpuHeavy: false,
-            _tpp250AutoBalance,
-            _tppCpuSimultaneousWatts);
+        if (_platform.IsAmd)
+        {
+            AmdCpuTuningService.ApplyPowerLimits(
+                _cpuPl1Watts,
+                _cpuPl2Watts,
+                isGpuHeavy: false,
+                _tpp250AutoBalance,
+                _tppCpuSimultaneousWatts,
+                _amdUvOffset);
+            _lastCpuTuningStatus = AmdCpuTuningService.StatusMessage;
+        }
+        else
+        {
+            IntelCpuTuningService.ApplyTuning(
+                _cpuPl1Watts,
+                _cpuPl2Watts,
+                _cpuTauSeconds,
+                isGpuHeavy: false,
+                _tpp250AutoBalance,
+                _tppCpuSimultaneousWatts);
+            _lastCpuTuningStatus = IntelCpuTuningService.StatusMessage;
+        }
 
         _sessionTimer = new System.Threading.Timer(_ => PersistSettings(), null, 30_000, 30_000);
     }
@@ -836,6 +890,7 @@ public partial class FormMain : Form
             _settings.CpuPl1Watts = _cpuPl1Watts;
             _settings.CpuPl2Watts = _cpuPl2Watts;
             _settings.CpuTauSeconds = _cpuTauSeconds;
+            _settings.AmdUvOffset = _amdUvOffset;
             _settings.Tpp250AutoBalance = _tpp250AutoBalance;
             _settings.TppCpuSimultaneousWatts = _tppCpuSimultaneousWatts;
             _settings.GpuClockCapMhz = _gpuClockCapMhz ?? 0;
@@ -843,6 +898,7 @@ public partial class FormMain : Form
             _settings.GpuDynamicBoostEnabled = _gpuDynamicBoost;
             _settings.LastActiveUtc = DateTime.UtcNow;
             _settings.SessionActive = !markCleanExit;
+            _settings.Normalize();
             AppSettingsStore.Save(_settings);
         }
     }
@@ -907,11 +963,11 @@ public partial class FormMain : Form
                     _gpuCtgp = requested.Ctgp;
                     _gpuDynamicBoost = requested.Ppab;
                     _gpuDState = requested.DState;
-                    _gpuModeWatts = (_gpuCtgp && _gpuDynamicBoost) ? 175 : (_gpuDynamicBoost ? 155 : 140);
+                    _gpuModeWatts = _platform.CalculateGpuTargetWatts(_gpuCtgp, _gpuDynamicBoost);
                 }
                 else if (_gpuModeWatts < 0)
                 {
-                    _gpuModeWatts = 140;
+                    _gpuModeWatts = _platform.GpuProfile.BaseNoCtgpWatts;
                 }
                 _gpuModeStatus = status;
             }
@@ -927,7 +983,7 @@ public partial class FormMain : Form
 
         try
         {
-            // 초기 부팅 시 RTX 5070 Ti 140~175W cTGP/PPAB 상태 동기화
+            // 초기 부팅 시 감지된 외장 GPU 모델별 cTGP / PPAB 상태 동기화
             var desiredMode = new GpuPowerMode(_gpuCtgp, _gpuDynamicBoost, 1, 87);
             if (_gpuPower.TryGet(out GpuPowerMode cur, out _))
             {
@@ -941,7 +997,7 @@ public partial class FormMain : Form
                     _gpuCtgp = cur.Ctgp;
                     _gpuDynamicBoost = cur.Ppab;
                     _gpuDState = cur.DState;
-                    _gpuModeWatts = (_gpuCtgp && _gpuDynamicBoost) ? 175 : (_gpuDynamicBoost ? 155 : 140);
+                    _gpuModeWatts = _platform.CalculateGpuTargetWatts(_gpuCtgp, _gpuDynamicBoost);
                 }
             }
         }
@@ -952,7 +1008,7 @@ public partial class FormMain : Form
             try
             {
                 PerformHardwarePolling();
-                _lastCpuTuningStatus = IntelCpuTuningService.StatusMessage;
+
                 float cpuW, gpuW, gpuUsage;
                 bool isGpuActive;
                 lock (_stateLock)
@@ -963,13 +1019,28 @@ public partial class FormMain : Form
                     gpuUsage = _lastGpu.UsagePercent ?? 0f;
                 }
 
-                IntelCpuTuningService.CheckAndMaintain(
-                    cpuW,
-                    isGpuActive,
-                    gpuW,
-                    gpuUsage,
-                    _tpp250AutoBalance,
-                    _tppCpuSimultaneousWatts);
+                if (_platform.IsAmd)
+                {
+                    AmdCpuTuningService.CheckAndMaintain(
+                        cpuW,
+                        isGpuActive,
+                        gpuW,
+                        gpuUsage,
+                        _tpp250AutoBalance,
+                        _tppCpuSimultaneousWatts);
+                    _lastCpuTuningStatus = AmdCpuTuningService.StatusMessage;
+                }
+                else
+                {
+                    IntelCpuTuningService.CheckAndMaintain(
+                        cpuW,
+                        isGpuActive,
+                        gpuW,
+                        gpuUsage,
+                        _tpp250AutoBalance,
+                        _tppCpuSimultaneousWatts);
+                    _lastCpuTuningStatus = IntelCpuTuningService.StatusMessage;
+                }
 
                 FpsMonitorService.Tick();
                 HandlePowerStateAutoTransition(_lastBattery.IsAcConnected);
@@ -1003,12 +1074,25 @@ public partial class FormMain : Form
         if (_hwMonitor != null)
         {
             var (c, g) = _hwMonitor.ReadStatus(shouldMonitorGpu);
-            var (msrPl1, msrPl2) = IntelCpuTuningService.ReadCurrentPowerLimits();
-            c.Pl1LimitWatts = msrPl1;
-            c.Pl2LimitWatts = msrPl2;
+            if (string.IsNullOrWhiteSpace(c.Name) || c.Name == Environment.MachineName)
+            {
+                c.Name = _platform.CpuFullName;
+            }
+
+            var (pl1Limit, pl2Limit) = _platform.IsAmd
+                ? AmdCpuTuningService.ReadCurrentPowerLimits()
+                : IntelCpuTuningService.ReadCurrentPowerLimits();
+
+            c.Pl1LimitWatts = pl1Limit;
+            c.Pl2LimitWatts = pl2Limit;
             newCpu = c;
+
             if (shouldMonitorGpu && g.IsHardwareAvailable && g.IsDiscrete)
             {
+                if (string.IsNullOrWhiteSpace(g.Name))
+                {
+                    g.Name = _platform.DiscreteGpuFullName;
+                }
                 newGpu = g;
                 newGpuActive = true;
             }
@@ -1111,7 +1195,22 @@ public partial class FormMain : Form
         HudSnapshot snap = BuildSnapshot();
 
         string snapFanError; bool snapCoolMode, snapQuietMode;
-        lock (_stateLock) { snapFanError = _fanError; snapCoolMode = _coolMode; snapQuietMode = _quietMode; }
+        string cpuSensorName, gpuSensorName;
+        lock (_stateLock)
+        {
+            snapFanError = _fanError;
+            snapCoolMode = _coolMode;
+            snapQuietMode = _quietMode;
+            cpuSensorName = _lastCpu.Name;
+            gpuSensorName = _lastGpu.Name;
+        }
+
+        string effectiveCpuName = (!string.IsNullOrWhiteSpace(cpuSensorName) && cpuSensorName != Environment.MachineName)
+            ? cpuSensorName
+            : _platform.CpuFullName;
+        string effectiveGpuName = !string.IsNullOrWhiteSpace(gpuSensorName)
+            ? gpuSensorName
+            : _platform.DiscreteGpuFullName;
 
         bool snapGpuBoost, snapGpuCtgp; byte snapGpuDState; int snapClockCap, snapClockCapApplied;
         lock (_gpuLimitLock)
@@ -1123,10 +1222,34 @@ public partial class FormMain : Form
             snapClockCapApplied = _gpuClockCapAppliedMhz ?? 0;
         }
 
+        int effPl1 = _platform.IsAmd ? AmdCpuTuningService.EffectivePl1Watts : IntelCpuTuningService.EffectivePl1Watts;
+        int effPl2 = _platform.IsAmd ? AmdCpuTuningService.EffectivePl2Watts : IntelCpuTuningService.EffectivePl2Watts;
+        bool tppActive = _platform.IsAmd ? AmdCpuTuningService.IsTppActive : IntelCpuTuningService.IsTpp250Active;
+        string tuningStatus = _platform.IsAmd ? AmdCpuTuningService.StatusMessage : IntelCpuTuningService.StatusMessage;
+
         return new
         {
-            cpu = new { usage = snap.CpuUsage, fps = snap.CurrentFps, temp = snap.CpuTemp, clock = snap.CpuClockGhz, power = snap.CpuPower, voltage = snap.CpuVoltage },
-            gpu = new { active = snap.GpuActive, usage = snap.GpuUsage, temp = snap.GpuTemp, clock = snap.GpuClockGhz, power = snap.GpuPower },
+            cpu = new
+            {
+                name = effectiveCpuName,
+                shortName = _platform.CpuShortName,
+                usage = snap.CpuUsage,
+                fps = snap.CurrentFps,
+                temp = snap.CpuTemp,
+                clock = snap.CpuClockGhz,
+                power = snap.CpuPower,
+                voltage = snap.CpuVoltage
+            },
+            gpu = new
+            {
+                name = effectiveGpuName,
+                shortName = _platform.DiscreteGpuShortName,
+                active = snap.GpuActive,
+                usage = snap.GpuUsage,
+                temp = snap.GpuTemp,
+                clock = snap.GpuClockGhz,
+                power = snap.GpuPower
+            },
             fan = new
             {
                 cpuPercent = snap.FanCpuPercent,
@@ -1140,6 +1263,19 @@ public partial class FormMain : Form
             battery = new { percent = snap.BatteryPercent, watts = snap.BatteryWatts, charging = snap.BatteryCharging },
             ui = new
             {
+                cpuVendor = _platform.PlatformKey,
+                platformFamily = _platform.PlatformFamily,
+                maxTppWatts = _platform.MaxTppWatts,
+                maxGpuWatts = _platform.GpuProfile.MaxWatts,
+                gpuMinWatts = _platform.GpuProfile.MinWatts,
+                gpuBaseNoCtgpWatts = _platform.GpuProfile.BaseNoCtgpWatts,
+                gpuBaseWatts = _platform.GpuProfile.BaseWatts,
+                gpuDynamicBoostWatts = _platform.GpuProfile.DynamicBoostWatts,
+                cpuMinWatts = _platform.CpuProfile.MinWatts,
+                cpuMaxPl1Watts = _platform.CpuProfile.MaxPl1Watts,
+                cpuMaxPl2Watts = _platform.CpuProfile.MaxPl2Watts,
+                tppCpuMinWatts = _platform.CpuProfile.TppCpuMinWatts,
+                tppCpuMaxWatts = _platform.EffectiveTppCpuMaxWatts,
                 powerProfile = snap.PowerProfileLabel == "ECO" ? "efficient" : (snap.PowerProfileLabel == "MAX" ? "performance" : "balanced"),
                 fanMode = snapCoolMode ? "custom" : (snapQuietMode ? "quiet" : "auto"),
                 refreshRate = snap.RefreshRateHz,
@@ -1156,12 +1292,13 @@ public partial class FormMain : Form
                 cpuPl1Watts = _cpuPl1Watts,
                 cpuPl2Watts = _cpuPl2Watts,
                 cpuTauSeconds = _cpuTauSeconds,
-                cpuEffectivePl1Watts = IntelCpuTuningService.EffectivePl1Watts,
-                cpuEffectivePl2Watts = IntelCpuTuningService.EffectivePl2Watts,
+                amdUvOffset = _amdUvOffset,
+                cpuEffectivePl1Watts = effPl1,
+                cpuEffectivePl2Watts = effPl2,
                 tpp250AutoBalance = _tpp250AutoBalance,
                 tppCpuWatts = _tppCpuSimultaneousWatts,
-                tpp250Active = IntelCpuTuningService.IsTpp250Active,
-                cpuTuningStatus = IntelCpuTuningService.StatusMessage
+                tpp250Active = tppActive,
+                cpuTuningStatus = tuningStatus
             }
         };
     }
@@ -1207,7 +1344,6 @@ public partial class FormMain : Form
         if (_lastBattery.IsAcConnected) _lastAcPowerProfile = prof;
         ApplyDisplayRefreshRate(prof == PerformanceProfile.BestPowerEfficiency ? 60u : 240u);
 
-        // Windows 전원 모드 전환 시 HP BIOS 열 정책(0x1A)도 함께 동기화 (TPP 250W 해제용)
         HpOmenPerformanceMode omenMode = prof switch
         {
             PerformanceProfile.BestPowerEfficiency => HpOmenPerformanceMode.Cool,
@@ -1392,7 +1528,6 @@ public partial class FormMain : Form
         int cpuPercent = rawCpuPercent;
         int gpuPercent = rawGpuPercent;
 
-        // QUIET / COOL 모드에서는 CPU/GPU 개별 온도 커브 목표치 중 높은 쪽에 맞춰 두 팬을 동일 속도로 동기화
         if (isQuietMode || isCoolMode)
         {
             int syncedPercent = Math.Max(rawCpuPercent, rawGpuPercent);
@@ -1426,7 +1561,6 @@ public partial class FormMain : Form
             {
                 int maxDrop = Math.Max(prevCpu.Value - cpuPercent, prevGpu.Value - gpuPercent);
                 _fanDecreaseHoldCount++;
-                // 소폭(1~3%) 하락 시 3회(~6초) 유지 후 감속해 불필요한 팬 출렁임(hunting) 방지
                 if (maxDrop < 4 && _fanDecreaseHoldCount < 3)
                 {
                     cpuPercent = prevCpu.Value;
@@ -1494,7 +1628,6 @@ public partial class FormMain : Form
         new CurvePoint(80, 82), new CurvePoint(90, 100), new CurvePoint(100, 100)
     };
 
-    // 조용한 기본 AUTO 프로파일: 유휴/저부하 구간 정숙성 극대화 + 83°C 이상에서만 단계적 냉각 강화
     private static CurvePoint[] AutoCurvePoints() => new[] {
         new CurvePoint(45, 0), new CurvePoint(55, 8), new CurvePoint(65, 14),
         new CurvePoint(75, 22), new CurvePoint(83, 34), new CurvePoint(90, 55),
@@ -1725,7 +1858,7 @@ public partial class FormMain : Form
         tm.Items.Add("종료", null, (_, _) => { _closing = true; Application.Exit(); });
         tm.Opening += (_, _) => UpdateTrayChecks();
 
-        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "OMEN MAX 16", ContextMenuStrip = tm, Visible = true };
+        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = _platform.PlatformFamily, ContextMenuStrip = tm, Visible = true };
         _tray.MouseClick += (_, ea) => { if (ea.Button == MouseButtons.Left) { if (Visible) Hide(); else OpenFromTray(); } };
     }
 
@@ -1760,6 +1893,7 @@ public partial class FormMain : Form
         PersistSettings(markCleanExit: true);
         FpsMonitorService.Shutdown();
         IntelCpuTuningService.Shutdown();
+        AmdCpuTuningService.Shutdown();
         _monitoringCts.Cancel();
 
         _hud?.Close();
@@ -1794,7 +1928,6 @@ public partial class FormMain : Form
             return File.ReadAllText(htmlPath, System.Text.Encoding.UTF8);
         }
 
-        // 디버그/빌드 경로가 다를 경우 프로젝트 폴더 기준 fallback 탐색
         var devPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\Forms\Form.html"));
         if (File.Exists(devPath))
         {

@@ -215,9 +215,7 @@
           if (typeof ReactDOM === 'undefined') show('ReactDOM 로드 실패 (네트워크/CDN 확인)');
           if (typeof tailwind === 'undefined') show('Tailwind 로드 실패 (네트워크/CDN 확인)');
           var r = document.getElementById('root');
-          if (r) {
-            if (!r.hasChildNodes()) show('앱이 렌더링되지 않았습니다 (위 오류 확인)');
-          }
+          if (r && !r.hasChildNodes()) show('앱이 렌더링되지 않았습니다 (위 오류 확인)');
         }, 4000);
       });
     })();
@@ -228,6 +226,15 @@
     (function () {
       'use strict';
       var e = React.createElement;
+
+      function numOr(v, fallback) {
+        var n = Number(v);
+        return (v != null && v !== '' && Number.isFinite(n)) ? n : fallback;
+      }
+
+      function clampNum(v, min, max) {
+        return Math.max(min, Math.min(max, v));
+      }
 
       function svgIcon(className, children, vb) {
         return e('svg', {
@@ -283,7 +290,7 @@
       };
 
       var IconBattery = function (p) {
-        var lvl = Math.max(0, Math.min(100, Number(p.level) ? Number(p.level) : 0));
+        var lvl = clampNum(numOr(p.level, 0), 0, 100);
         var w = (12 * lvl) / 100;
         return svgIcon(p.className, [
           e('rect', { key: 1, width: 16, height: 10, x: 2, y: 7, rx: 2, ry: 2 }),
@@ -369,19 +376,20 @@
 
       function useSmooth(target, duration) {
         var dur = duration ? duration : 600;
-        var initial = (target != null) ? target : 0;
+        var initial = numOr(target, 0);
         var state = React.useState(initial);
         var v = state[0], setV = state[1];
         var fromRef = React.useRef(initial);
         React.useEffect(function () {
-          if (target == null) return;
+          if (target == null || !Number.isFinite(Number(target))) return;
+          var dest = Number(target);
           var from = fromRef.current;
           var start = performance.now();
           var raf;
           function tick(now) {
             var p = Math.min(1, (now - start) / dur);
             var eased = 1 - Math.pow(1 - p, 3);
-            var cur = from + (target - from) * eased;
+            var cur = from + (dest - from) * eased;
             fromRef.current = cur;
             setV(cur);
             if (p < 1) raf = requestAnimationFrame(tick);
@@ -393,16 +401,18 @@
       }
 
       function tempTone(t, isDark) {
-        if (t >= 88) return isDark ? 'text-rose-400' : 'text-rose-600';
-        if (t >= 78) return isDark ? 'text-amber-300' : 'text-amber-700';
-        if (t >= 65) return isDark ? 'text-amber-200' : 'text-amber-600';
+        var val = numOr(t, 0);
+        if (val >= 88) return isDark ? 'text-rose-400' : 'text-rose-600';
+        if (val >= 78) return isDark ? 'text-amber-300' : 'text-amber-700';
+        if (val >= 65) return isDark ? 'text-amber-200' : 'text-amber-600';
         return isDark ? 'text-slate-200' : 'text-[#1e2433]';
       }
 
       function tempGlow(t, isDark) {
+        var val = numOr(t, 0);
         if (isDark) return 'none';
-        if (t >= 93) return '0 0 12px rgba(244,63,94,.28)';
-        if (t >= 88) return '0 0 10px rgba(245,158,11,.22)';
+        if (val >= 93) return '0 0 12px rgba(244,63,94,.28)';
+        if (val >= 88) return '0 0 10px rgba(245,158,11,.22)';
         return 'none';
       }
 
@@ -416,12 +426,200 @@
       var TH_GPU_TEMP = [72, 80, 85];
       var TH_CPU_VOLT = [1.32, 1.40, 1.48];
       function levelOf(v, th) {
-        if (v == null) return 0;
-        if (!Number.isFinite(v)) return 0;
-        if (v >= th[2]) return 3;
-        if (v >= th[1]) return 2;
-        if (v >= th[0]) return 1;
+        if (v == null || !Number.isFinite(Number(v))) return 0;
+        var n = Number(v);
+        if (n >= th[2]) return 3;
+        if (n >= th[1]) return 2;
+        if (n >= th[0]) return 1;
         return 0;
+      }
+
+      function formatShortCpuName(raw) {
+        if (!raw) return 'OMEN CPU';
+        return String(raw)
+          .replace(/^(?:AMD\s+|Intel\(R\)\s+Core\(TM\)\s+)/i, '')
+          .replace(/\s+w\/\s+Radeon.*$/i, '')
+          .replace(/\s+Processor$/i, '')
+          .trim() || 'OMEN CPU';
+      }
+
+      function formatShortGpuName(raw) {
+        if (!raw) return 'RTX 50 Series';
+        var m = String(raw).match(/(RTX\s*50\d{2}(?:\s*Ti)?|RX\s*\d+\w*|Arc\s*[\w-]+)/i);
+        return m ? m[1].replace(/\s+/g, ' ').trim() : String(raw).replace(/^NVIDIA\s+GeForce\s+/i, '').trim();
+      }
+
+      /**
+       * OMEN MAX 16 (2025/2026) CPU & GPU 모델별 전력 하한~상한 프로파일 산출
+       * 백엔드 HardwarePlatformDetector + IntelCpuTuningService / AmdCpuTuningService와 100% 동기화
+       */
+      function resolveHardwareProfile(stats) {
+        var safeStats = stats || {};
+        var cpuRaw = String((safeStats.cpu && safeStats.cpu.name) || '');
+        var gpuRaw = String((safeStats.gpu && safeStats.gpu.name) || '');
+        var ui = safeStats.ui || {};
+
+        var vendor = String(ui.cpuVendor || '').toLowerCase();
+        var isAmd = (vendor === 'amd') || !!ui.isAmd || /ryzen|amd/i.test(cpuRaw);
+        var is2026Intel = !isAmd && (numOr(ui.platformYear, 0) === 2026 || !!ui.is2026Intel || /(270HX|290HX|Plus)/i.test(cpuRaw));
+        var is290Hx = !isAmd && /290HX/i.test(cpuRaw);
+        var isHx375Or475 = isAmd && /(375|475|HX)/i.test(cpuRaw);
+
+        // 1. CPU 최저치~상한 (HardwarePlatformDetector 전달값 우선 적용)
+        var cpuMinW = isAmd ? 15 : 20;
+        var cpuPl1MaxW = isAmd ? (isHx375Or475 ? 65 : 60) : (is2026Intel ? 150 : 140);
+        var cpuPl2MaxW = isAmd ? (isHx375Or475 ? 80 : 75) : (is290Hx ? 171 : 160);
+        var tppCpuMinW = isAmd ? 25 : 55;
+        var tppCpuMaxW = isAmd ? (isHx375Or475 ? 70 : 65) : (is2026Intel ? 130 : 115);
+
+        if (numOr(ui.cpuMinWatts, 0) > 0) cpuMinW = Math.round(Number(ui.cpuMinWatts));
+        if (numOr(ui.cpuMaxPl1Watts, 0) > 0) cpuPl1MaxW = Math.round(Number(ui.cpuMaxPl1Watts));
+        if (numOr(ui.cpuMaxPl2Watts, 0) > 0) cpuPl2MaxW = Math.round(Number(ui.cpuMaxPl2Watts));
+        if (cpuPl2MaxW < cpuPl1MaxW) cpuPl2MaxW = cpuPl1MaxW;
+
+        if (numOr(ui.tppCpuMinWatts, 0) > 0) tppCpuMinW = Math.round(Number(ui.tppCpuMinWatts));
+        if (numOr(ui.tppCpuMaxWatts, 0) > 0) tppCpuMaxW = Math.round(Number(ui.tppCpuMaxWatts));
+        tppCpuMaxW = Math.min(Math.max(tppCpuMinW, tppCpuMaxW), cpuPl2MaxW);
+        tppCpuMinW = Math.min(tppCpuMinW, tppCpuMaxW);
+
+        var rawPresets;
+        if (isAmd) {
+          var topPl1 = Math.min(55, cpuPl1MaxW);
+          var topPl2 = cpuPl2MaxW;
+          var highPl2 = Math.max(55, topPl2 - 10);
+          rawPresets = [
+            { label: '저전력', pl1: 15, pl2: 25, tau: 16, tpp: false, tppCpu: 40, desc: '저전력 · 문서/배터리 (STAPM 15W / PPT 25W)' },
+            { label: '정숙 게임', pl1: 28, pl2: 40, tau: 24, tpp: false, tppCpu: 45, desc: '정숙 게이밍 · 저소음/저발열 (STAPM 28W / PPT 40W)' },
+            { label: '균형 게임', pl1: 45, pl2: 55, tau: 32, tpp: true, tppCpu: 50, desc: '권장 게이밍 · 프레임 유지 + GPU 여유 확보 (45W / 55W)' },
+            { label: '고성능 게임', pl1: 50, pl2: highPl2, tau: 40, tpp: true, tppCpu: 55, desc: 'CPU 집약 게이밍 (50W / ' + highPl2 + 'W)' },
+            { label: '최대 성능', pl1: topPl1, pl2: topPl2, tau: 56, tpp: true, tppCpu: Math.min(tppCpuMaxW, topPl1 + 5), desc: 'OMEN Unleashed 최대 출력 (' + topPl1 + 'W / ' + topPl2 + 'W)' }
+          ];
+        } else if (is2026Intel) {
+          var pTop1 = Math.min(135, cpuPl1MaxW);
+          var pTop2 = cpuPl2MaxW;
+          var pHigh2 = Math.min(155, pTop2);
+          rawPresets = [
+            { label: '저전력', pl1: 35, pl2: 45, tau: 16, tpp: false, tppCpu: 75, desc: '저전력 · 문서/배터리 (35W / 45W)' },
+            { label: '정숙 게임', pl1: 65, pl2: 95, tau: 24, tpp: false, tppCpu: 85, desc: '정숙 게이밍 · 발열/소음 억제 (65W / 95W)' },
+            { label: '균형 게임', pl1: 95, pl2: 135, tau: 32, tpp: true, tppCpu: 100, desc: '권장 게이밍 · 1% Low 방어 + TPP 동적 배분 (95W / 135W)' },
+            { label: '고성능 게임', pl1: 115, pl2: pHigh2, tau: 40, tpp: true, tppCpu: 115, desc: 'CPU 집약/고주사율 FPS 게이밍 (115W / ' + pHigh2 + 'W)' },
+            { label: '최대 성능', pl1: pTop1, pl2: pTop2, tau: 56, tpp: true, tppCpu: 125, desc: '렌더링/벤치마크 최대 출력 (' + pTop1 + 'W / ' + pTop2 + 'W)' }
+          ];
+        } else {
+          rawPresets = [
+            { label: '저전력', pl1: 35, pl2: 45, tau: 16, tpp: false, tppCpu: 75, desc: '저전력 · 문서/배터리 (35W / 45W)' },
+            { label: '정숙 게임', pl1: 60, pl2: 85, tau: 24, tpp: false, tppCpu: 80, desc: '정숙 게이밍 · 발열/소음 억제 (60W / 85W)' },
+            { label: '균형 게임', pl1: 85, pl2: 125, tau: 32, tpp: true, tppCpu: 80, desc: '권장 게이밍 · 1% Low 방어 + TPP 동적 배분 (85W / 125W)' },
+            { label: '고성능 게임', pl1: 105, pl2: 145, tau: 40, tpp: true, tppCpu: 90, desc: 'CPU 집약/고주사율 FPS 게이밍 (105W / 145W)' },
+            { label: '최대 성능', pl1: 125, pl2: cpuPl2MaxW, tau: 56, tpp: true, tppCpu: 110, desc: '렌더링/벤치마크 최대 출력 (125W / ' + cpuPl2MaxW + 'W)' }
+          ];
+        }
+
+        var cpuPresets = rawPresets.map(function (p) {
+          var cp1 = clampNum(p.pl1, cpuMinW, cpuPl1MaxW);
+          var cp2 = clampNum(Math.max(p.pl2, cp1), cp1, cpuPl2MaxW);
+          var ctc = clampNum(p.tppCpu, tppCpuMinW, tppCpuMaxW);
+          return {
+            label: p.label,
+            sub: cp1 + '/' + cp2 + 'W',
+            pl1: cp1,
+            pl2: cp2,
+            tau: p.tau,
+            tpp: p.tpp,
+            tppCpu: ctc,
+            desc: p.desc
+          };
+        });
+
+        // 2. GPU 모델별 최저치~상한 (RTX 5060 / 5070 / 5070 Ti / 5080 / 5090)
+        var gpuTier = '5080_5090';
+        if (/5070\s*Ti/i.test(gpuRaw)) gpuTier = '5070Ti';
+        else if (/5060|5070/i.test(gpuRaw)) gpuTier = '5060_5070';
+        else if (/5080|5090/i.test(gpuRaw)) gpuTier = '5080_5090';
+        else if (numOr(ui.maxGpuWatts, 0) > 0) {
+          var mw = Number(ui.maxGpuWatts);
+          gpuTier = (mw <= 120) ? '5060_5070' : ((mw <= 145) ? '5070Ti' : '5080_5090');
+        }
+
+        var gpuMinW, gpuBaseNoCtgpW, gpuBaseW, gpuDbW, gpuMaxW;
+        if (gpuTier === '5060_5070') {
+          gpuMinW = 45;
+          gpuBaseNoCtgpW = 85;
+          gpuBaseW = 100;
+          gpuDbW = 15;
+          gpuMaxW = 115;
+        } else if (gpuTier === '5070Ti') {
+          gpuMinW = 50;
+          gpuBaseNoCtgpW = 100;
+          gpuBaseW = 115;
+          gpuDbW = 25;
+          gpuMaxW = 140;
+        } else {
+          gpuMinW = 55;
+          gpuBaseNoCtgpW = 130;
+          gpuBaseW = 150;
+          gpuDbW = 25;
+          gpuMaxW = 175;
+        }
+
+        if (numOr(ui.gpuDynamicBoostWatts, 0) > 0) gpuDbW = Math.round(Number(ui.gpuDynamicBoostWatts));
+        if (numOr(ui.maxGpuWatts, 0) > 0) {
+          gpuMaxW = Math.round(Number(ui.maxGpuWatts));
+          gpuBaseW = Math.max(gpuMinW, gpuMaxW - gpuDbW);
+        }
+        if (numOr(ui.gpuBaseWatts, 0) > 0) gpuBaseW = Math.round(Number(ui.gpuBaseWatts));
+        if (numOr(ui.gpuBaseNoCtgpWatts, 0) > 0) gpuBaseNoCtgpW = Math.round(Number(ui.gpuBaseNoCtgpWatts));
+
+        // 3. 플랫폼 최대 TPP 산출
+        var maxTppWatts = 250;
+        if (numOr(ui.maxTppWatts, 0) > 0) {
+          maxTppWatts = Math.round(Number(ui.maxTppWatts));
+        } else if (is2026Intel) {
+          if (gpuMaxW >= 175) maxTppWatts = 300;
+          else if (gpuMaxW >= 140) maxTppWatts = 265;
+          else maxTppWatts = 250;
+        }
+
+        return {
+          isAmd: isAmd,
+          is2026Intel: is2026Intel,
+          cpuMinW: cpuMinW,
+          cpuPl1MaxW: cpuPl1MaxW,
+          cpuPl2MaxW: cpuPl2MaxW,
+          tppCpuMinW: tppCpuMinW,
+          tppCpuMaxW: tppCpuMaxW,
+          cpuPresets: cpuPresets,
+          gpuMinW: gpuMinW,
+          gpuBaseNoCtgpW: gpuBaseNoCtgpW,
+          gpuBaseW: gpuBaseW,
+          gpuDbW: gpuDbW,
+          gpuMaxW: gpuMaxW,
+          maxTppWatts: maxTppWatts
+        };
+      }
+
+      function buildCapTable(minW, maxW) {
+        var lo = Math.max(35, numOr(minW, 50));
+        var hi = Math.max(lo + 20, numOr(maxW, 175));
+        var clocks = [1500, 1700, 1900, 2100, 2300, 2500, 2700];
+        var ratios = [0.0, 0.13, 0.28, 0.46, 0.67, 0.84, 1.0];
+        var out = [];
+        for (var i = 0; i < clocks.length; i++) {
+          out.push([clocks[i], lo + (hi - lo) * ratios[i]]);
+        }
+        return out;
+      }
+
+      function estWatts(mhz, minW, maxW) {
+        var table = buildCapTable(minW, maxW);
+        if (mhz <= table[0][0]) return table[0][1];
+        if (mhz >= table[table.length - 1][0]) return table[table.length - 1][1];
+        for (var i = 0; i < table.length - 1; i++) {
+          var x0 = table[i][0], y0 = table[i][1];
+          var x1 = table[i + 1][0], y1 = table[i + 1][1];
+          if (mhz >= x0 && mhz <= x1) return y0 + (y1 - y0) * ((mhz - x0) / (x1 - x0));
+        }
+        return table[table.length - 1][1];
       }
 
       function GlassCard(p) {
@@ -466,12 +664,13 @@
       }
 
       function ProgressBar(p) {
-        var max = p.max ? p.max : 100;
-        var percentage = p.inactive ? 0 : Math.min(100, Math.max(0, (p.value / max) * 100));
+        var safeMax = (numOr(p.max, 100) > 0) ? numOr(p.max, 100) : 100;
+        var safeVal = numOr(p.value, 0);
+        var percentage = p.inactive ? 0 : clampNum((safeVal / safeMax) * 100, 0, 100);
         var lblCls = p.inactive ? (p.isDark ? 'text-slate-600' : 'text-[#94a3b8]') : (p.isDark ? 'text-slate-300 group-hover/bar:text-white' : 'text-[#525d73] group-hover/bar:text-[#1e2433]');
         var subCls = p.inactive ? (p.isDark ? 'text-slate-600' : 'text-[#94a3b8]') : (p.isDark ? 'text-slate-400 group-hover/bar:text-slate-200' : 'text-[#647087] group-hover/bar:text-[#1e2433]');
         var hasW = p.subLabel ? (p.subLabel.indexOf('W') >= 0) : false;
-        var subTxt = p.inactive ? (hasW ? '0 W' : '0%') : (p.subLabel ? p.subLabel : String(Math.round(p.value)));
+        var subTxt = p.inactive ? (hasW ? '0 W' : '0%') : (p.subLabel ? p.subLabel : String(Math.round(safeVal)));
         var trackCls = p.isDark ? 'bg-[#12141d] border-[#292e42]' : 'bg-[#eef1f7] border-[#e3e8f2]';
         var showShim = p.inactive ? false : (percentage > 2);
         return e('div', { className: 'w-full flex flex-col gap-[3px] group/bar' }, [
@@ -490,7 +689,7 @@
 
       function FanHalfCard(p) {
         var rpmSmooth = useSmooth(p.rpm);
-        var pctNum = (p.percent != null) ? p.percent : 0;
+        var pctNum = numOr(p.percent, 0);
         var spinSeconds = Math.min(2.2, Math.max(0.4, 2.2 - pctNum * 0.02));
         var iconBg = p.spinning ? (p.isDark ? 'bg-[#25293b] ' + p.colorClass : 'bg-violet-100/90 ' + p.colorClass) : (p.isDark ? 'bg-[#151822] text-slate-600' : 'bg-[#f1f4f9] text-[#94a3b8]');
         var syncCls = p.isDark ? 'text-emerald-300 bg-[#1b2e2a] border border-emerald-700/50' : 'text-emerald-700 bg-emerald-100 border border-emerald-300/80';
@@ -609,9 +808,9 @@
         var lv = levelOf(p.voltage, TH_CPU_VOLT);
         var worst = Math.max(lc, lg, lv);
         var s = STATUS_LEVELS[worst];
-        var gpuPart = p.gpuActive ? (Math.round(p.gpuTemp) + '°C ' + STATUS_LEVELS[lg].name) : 'OFF';
-        var voltPart = (p.voltage != null) ? (p.voltage.toFixed(3) + 'V ' + STATUS_LEVELS[lv].name) : '--';
-        var tip = 'CPU ' + Math.round(p.cpuTemp ? p.cpuTemp : 0) + '°C ' + STATUS_LEVELS[lc].name + ' · GPU ' + gpuPart + ' · 전압 ' + voltPart;
+        var gpuPart = p.gpuActive ? (Math.round(numOr(p.gpuTemp, 0)) + '°C ' + STATUS_LEVELS[lg].name) : 'OFF';
+        var voltPart = (p.voltage != null && Number.isFinite(Number(p.voltage))) ? (Number(p.voltage).toFixed(3) + 'V ' + STATUS_LEVELS[lv].name) : '--';
+        var tip = 'CPU ' + Math.round(numOr(p.cpuTemp, 0)) + '°C ' + STATUS_LEVELS[lc].name + ' · GPU ' + gpuPart + ' · 전압 ' + voltPart;
         return e('span', {
           className: 'w-2 h-2 rounded-full self-center shrink-0 transition-transform duration-200 hover:scale-125',
           title: tip,
@@ -623,60 +822,58 @@
         });
       }
 
-      var CAP_TABLE = [
-        [1500, 55.0],
-        [1700, 70.0],
-        [1900, 88.0],
-        [2100, 110.0],
-        [2300, 135.0],
-        [2500, 155.0],
-        [2700, 175.0]
-      ];
-      function estWatts(mhz) {
-        if (mhz <= CAP_TABLE[0][0]) return CAP_TABLE[0][1];
-        if (mhz >= CAP_TABLE[CAP_TABLE.length - 1][0]) return CAP_TABLE[CAP_TABLE.length - 1][1];
-        for (var i = 0; i < CAP_TABLE.length - 1; i++) {
-          var x0 = CAP_TABLE[i][0], y0 = CAP_TABLE[i][1];
-          var x1 = CAP_TABLE[i + 1][0], y1 = CAP_TABLE[i + 1][1];
-          if (mhz >= x0) {
-            if (mhz <= x1) return y0 + (y1 - y0) * ((mhz - x0) / (x1 - x0));
-          }
-        }
-        return 175;
-      }
-
       function App() {
         var darkState = React.useState(false);
         var isDark = darkState[0], setIsDark = darkState[1];
 
         var statsState = React.useState({
-          cpu: { usage: 0, fps: null, temp: 0, clock: 0, power: 0, voltage: null },
-          gpu: { active: false, usage: 0, temp: 0, clock: 0, power: 0 },
+          cpu: { usage: 0, fps: null, temp: 0, clock: 0, power: 0, voltage: null, name: '' },
+          gpu: { active: false, usage: 0, temp: 0, clock: 0, power: 0, name: '' },
           fan: { cpuPercent: null, gpuPercent: null, cpuRpm: null, gpuRpm: null, cpuEstimated: false, gpuEstimated: false, error: '' },
           battery: { percent: 80, watts: 0, charging: false },
           ui: {
             powerProfile: 'balanced', fanMode: 'auto', refreshRate: 240, isLocked: true,
+            platformFamily: 'OMEN MAX 16',
+            cpuVendor: '',
+            maxTppWatts: 0,
+            maxGpuWatts: 0,
+            cpuMinWatts: 0,
+            cpuMaxPl1Watts: 0,
+            cpuMaxPl2Watts: 0,
+            tppCpuMinWatts: 0,
+            tppCpuMaxWatts: 0,
             gpuModeStatus: 'GPU 대기 중', gpuRequestedWatts: 175, gpuDynamicBoost: true, gpuCtgp: true, gpuDState: 1,
             gpuClockCap: 0, gpuClockCapApplied: 0, isGpuEnabled: true, isGpuPresent: true,
             cpuPl1Watts: 85, cpuPl2Watts: 125, cpuTauSeconds: 32,
             cpuEffectivePl1Watts: 85, cpuEffectivePl2Watts: 125,
-            tpp250AutoBalance: true, tppCpuWatts: 80, tpp250Active: false,
-            cpuTuningStatus: 'Intel 275HX 게이밍 전력 제어 준비됨'
+            tppAutoBalance: true, tpp250AutoBalance: true,
+            tppCpuWatts: 80,
+            tppActive: false, tpp250Active: false,
+            cpuTuningStatus: 'OMEN MAX 16 전력 제어 준비됨'
           }
         });
         var stats = statsState[0], setStats = statsState[1];
 
-        var cpuModalState = React.useState({ open: false, pl1: 85, pl2: 125, tau: 32, tpp250: true, tppCpu: 80 });
+        var spec = resolveHardwareProfile(stats);
+        var specRef = React.useRef(spec);
+        specRef.current = spec;
+
+        var cpuModalState = React.useState({
+          open: false,
+          pl1: 85,
+          pl2: 125,
+          tau: 32,
+          tppAutoBalance: true,
+          tppCpu: 80
+        });
         var cpuPowerModal = cpuModalState[0], setCpuPowerModal = cpuModalState[1];
 
         var gpuModalState = React.useState({ open: false, cap: 0 });
         var gpuModal = gpuModalState[0], setGpuModal = gpuModalState[1];
 
         function sendCmd(cmd, payload) {
-          if (window.chrome) {
-            if (window.chrome.webview) {
-              window.chrome.webview.postMessage({ cmd: cmd, payload: (payload != null) ? payload : null });
-            }
+          if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage({ cmd: cmd, payload: (payload != null) ? payload : null });
           }
         }
 
@@ -686,98 +883,163 @@
         }, [isDark]);
 
         React.useEffect(function () {
-          function onCloseCpu() {
+          function onClosePopovers() {
             setCpuPowerModal(function (m) { return m.open ? Object.assign({}, m, { open: false }) : m; });
+            setGpuModal(function (g) { return g.open ? Object.assign({}, g, { open: false }) : g; });
           }
-          window.addEventListener('omen-close-cpu-modal', onCloseCpu);
-          return function () { window.removeEventListener('omen-close-cpu-modal', onCloseCpu); };
+          window.addEventListener('omen-close-popovers', onClosePopovers);
+          return function () { window.removeEventListener('omen-close-popovers', onClosePopovers); };
         }, []);
 
         React.useEffect(function () {
-          if (window.chrome) {
-            if (window.chrome.webview) {
-              window.chrome.webview.addEventListener('message', function (ev) {
-                var d = ev.data;
-                if (!d) return;
-                if (d.cmd === 'OPEN_CPU_POWER_MODAL' || d.cmd === 'OPEN_UV_MODAL') {
-                  setCpuPowerModal({
-                    open: true,
-                    pl1: (d.pl1 != null) ? d.pl1 : 85,
-                    pl2: (d.pl2 != null) ? d.pl2 : 125,
-                    tau: (d.tau != null) ? d.tau : 32,
-                    tpp250: (d.tpp250AutoBalance != null) ? d.tpp250AutoBalance : true,
-                    tppCpu: (d.tppCpuWatts != null) ? d.tppCpuWatts : 80
+          if (window.chrome && window.chrome.webview) {
+            var handler = function (ev) {
+              var d = ev.data;
+              if (!d) return;
+              var curSpec = specRef.current;
+              if (d.cmd === 'OPEN_CPU_POWER_MODAL' || d.cmd === 'OPEN_UV_MODAL') {
+                var rawP1 = (d.pl1 != null) ? d.pl1 : d.cpuPl1Watts;
+                var rawP2 = (d.pl2 != null) ? d.pl2 : d.cpuPl2Watts;
+                var rawTau = (d.tau != null) ? d.tau : d.cpuTauSeconds;
+                var rawTpp = (d.tppAutoBalance != null) ? d.tppAutoBalance : d.tpp250AutoBalance;
+                var rawTppCpu = (d.tppCpuWatts != null) ? d.tppCpuWatts : d.tppCpu;
+
+                var p1 = clampNum(numOr(rawP1, curSpec.cpuPresets[2].pl1), curSpec.cpuMinW, curSpec.cpuPl1MaxW);
+                var p2 = clampNum(numOr(rawP2, curSpec.cpuPresets[2].pl2), p1, curSpec.cpuPl2MaxW);
+                var tc = clampNum(numOr(rawTppCpu, curSpec.cpuPresets[2].tppCpu), curSpec.tppCpuMinW, curSpec.tppCpuMaxW);
+                setGpuModal(function (g) { return g.open ? Object.assign({}, g, { open: false }) : g; });
+                setCpuPowerModal({
+                  open: true,
+                  pl1: p1,
+                  pl2: p2,
+                  tau: clampNum(numOr(rawTau, 32), 1, 56),
+                  tppAutoBalance: (rawTpp != null) ? !!rawTpp : true,
+                  tppCpu: tc
+                });
+              } else if (d.cpu && d.ui) {
+                setStats(function (prev) {
+                  var nextStats = Object.assign({}, prev, d, {
+                    cpu: Object.assign({}, prev.cpu, d.cpu),
+                    gpu: d.gpu ? Object.assign({}, prev.gpu, d.gpu) : prev.gpu,
+                    fan: d.fan ? Object.assign({}, prev.fan, d.fan) : prev.fan,
+                    battery: d.battery ? Object.assign({}, prev.battery, d.battery) : prev.battery,
+                    ui: Object.assign({}, prev.ui, d.ui)
                   });
-                } else if (d.cpu) {
-                  if (d.ui) {
-                    setStats(d);
-                    setCpuPowerModal(function (m) {
-                      if (m.open) return m;
-                      return {
-                        open: false,
-                        pl1: (d.ui.cpuPl1Watts != null) ? d.ui.cpuPl1Watts : m.pl1,
-                        pl2: (d.ui.cpuPl2Watts != null) ? d.ui.cpuPl2Watts : m.pl2,
-                        tau: (d.ui.cpuTauSeconds != null) ? d.ui.cpuTauSeconds : m.tau,
-                        tpp250: (d.ui.tpp250AutoBalance != null) ? d.ui.tpp250AutoBalance : m.tpp250,
-                        tppCpu: (d.ui.tppCpuWatts != null) ? d.ui.tppCpuWatts : m.tppCpu
-                      };
-                    });
-                  }
-                }
-              });
-            }
+                  var nextSpec = resolveHardwareProfile(nextStats);
+                  var nextTppEnabled = (nextStats.ui.tppAutoBalance != null)
+                    ? !!nextStats.ui.tppAutoBalance
+                    : ((nextStats.ui.tpp250AutoBalance != null) ? !!nextStats.ui.tpp250AutoBalance : true);
+                  setCpuPowerModal(function (m) {
+                    if (m.open) return m;
+                    var np1 = clampNum(numOr(nextStats.ui.cpuPl1Watts, nextSpec.cpuPresets[2].pl1), nextSpec.cpuMinW, nextSpec.cpuPl1MaxW);
+                    var np2 = clampNum(numOr(nextStats.ui.cpuPl2Watts, nextSpec.cpuPresets[2].pl2), np1, nextSpec.cpuPl2MaxW);
+                    var ntc = clampNum(numOr(nextStats.ui.tppCpuWatts, nextSpec.cpuPresets[2].tppCpu), nextSpec.tppCpuMinW, nextSpec.tppCpuMaxW);
+                    return {
+                      open: false,
+                      pl1: np1,
+                      pl2: np2,
+                      tau: clampNum(numOr(nextStats.ui.cpuTauSeconds, m.tau), 1, 56),
+                      tppAutoBalance: nextTppEnabled,
+                      tppCpu: ntc
+                    };
+                  });
+                  return nextStats;
+                });
+              }
+            };
+            window.chrome.webview.addEventListener('message', handler);
+            return function () { window.chrome.webview.removeEventListener('message', handler); };
           }
         }, []);
 
         var ui = stats.ui;
         var gpuMissing = !ui.isGpuPresent;
-        var fullGpuMaxW = (ui.gpuCtgp ? (ui.gpuDynamicBoost ? 175 : 140) : (ui.gpuDynamicBoost ? 155 : 140));
-        var gpuPowerMax = (ui.gpuClockCapApplied > 0) ? Math.max(40, Math.round(estWatts(ui.gpuClockCapApplied))) : fullGpuMaxW;
-        var cpuPowerMax = ui.cpuEffectivePl2Watts ? ui.cpuEffectivePl2Watts : (ui.cpuPl2Watts ? ui.cpuPl2Watts : 125);
+        var tppCap = spec.maxTppWatts;
+        var baseGpuCap = spec.gpuMaxW;
+        var dbBonus = spec.gpuDbW;
+        var baseGpuNoDb = spec.gpuBaseW;
+        var fullGpuMaxW = ui.gpuCtgp
+          ? (ui.gpuDynamicBoost ? baseGpuCap : baseGpuNoDb)
+          : (ui.gpuDynamicBoost ? Math.min(baseGpuCap, spec.gpuBaseNoCtgpW + dbBonus) : spec.gpuBaseNoCtgpW);
+        var gpuPowerMax = (numOr(ui.gpuClockCapApplied, 0) > 0)
+          ? Math.max(spec.gpuMinW, Math.round(estWatts(ui.gpuClockCapApplied, spec.gpuMinW, fullGpuMaxW)))
+          : fullGpuMaxW;
+        var cpuPowerMax = numOr(ui.cpuEffectivePl2Watts, 0) > 0
+          ? numOr(ui.cpuEffectivePl2Watts, spec.cpuPl2MaxW)
+          : clampNum(numOr(ui.cpuPl2Watts, spec.cpuPl2MaxW), spec.cpuMinW, spec.cpuPl2MaxW);
         var fanSynced = (ui.fanMode === 'quiet') || (ui.fanMode === 'custom');
 
-        var cpuTempSmooth = useSmooth(stats.cpu.temp);
-        var gpuTempSmooth = useSmooth(stats.gpu.active ? stats.gpu.temp : null);
+        var safeCpuTemp = numOr(stats.cpu.temp, 0);
+        var safeGpuTemp = numOr(stats.gpu.temp, 0);
+        var cpuTempSmooth = useSmooth(safeCpuTemp);
+        var gpuTempSmooth = useSmooth(stats.gpu.active ? safeGpuTemp : null);
 
-        var cpuTone = Math.max(levelOf(stats.cpu.temp, TH_CPU_TEMP), levelOf(stats.cpu.voltage, TH_CPU_VOLT));
-        var gpuTone = stats.gpu.active ? levelOf(stats.gpu.temp, TH_GPU_TEMP) : 0;
+        var cpuTone = Math.max(levelOf(safeCpuTemp, TH_CPU_TEMP), levelOf(stats.cpu.voltage, TH_CPU_VOLT));
+        var gpuTone = stats.gpu.active ? levelOf(safeGpuTemp, TH_GPU_TEMP) : 0;
 
         var subText = isDark ? 'text-slate-400' : 'text-[#647087]';
         var mutedText = isDark ? 'text-slate-500' : 'text-[#7c879c]';
         var strongText = isDark ? 'text-slate-100' : 'text-[#1e2433]';
 
-        var CPU_PRESETS = [
-          { label: '저전력', sub: '35/45W', pl1: 35, pl2: 45, tpp: false, tppCpu: 80, desc: '저전력 · 문서/배터리 (35W / 45W)' },
-          { label: '정숙 게임', sub: '60/85W', pl1: 60, pl2: 85, tpp: false, tppCpu: 80, desc: '정숙 게이밍 · 발열/소음 억제 (60W / 85W)' },
-          { label: '균형 게임', sub: '85/125W', pl1: 85, pl2: 125, tpp: true, tppCpu: 80, desc: '권장 게이밍 · 1% Low 방어 + TPP 250W (85W / 125W)' },
-          { label: '고성능 게임', sub: '105/145W', pl1: 105, pl2: 145, tpp: true, tppCpu: 85, desc: 'CPU 집약/고주사율 FPS 게이밍 (105W / 145W)' },
-          { label: '최대 성능', sub: '140/160W', pl1: 140, pl2: 160, tpp: true, tppCpu: 85, desc: '렌더링/벤치마크 최대 출력 (140W / 160W)' }
-        ];
+        var cpuShortName = formatShortCpuName(stats.cpu.name);
+        var gpuShortName = formatShortGpuName(stats.gpu.name);
+        var headerTitle = ui.platformFamily ? ui.platformFamily : 'OMEN MAX 16';
 
-        var GPU_PRESETS = [[0, '제한 없음'], [2500, '2500'], [2300, '2300'], [2100, '2100'], [1900, '1900'], [1600, '1600']];
+        var clampedModalPl1 = clampNum(cpuPowerModal.pl1, spec.cpuMinW, spec.cpuPl1MaxW);
+        var clampedModalPl2 = clampNum(cpuPowerModal.pl2, clampedModalPl1, spec.cpuPl2MaxW);
+        var clampedModalTppCpu = clampNum(cpuPowerModal.tppCpu, spec.tppCpuMinW, spec.tppCpuMaxW);
 
-        var gpuCardHighlight = ui.powerProfile === 'performance' ? stats.gpu.active : false;
+        var GPU_PRESETS = [[0, '제한 없음'], [2500, '2500'], [2300, '2300'], [2100, '2100'], [1850, '1850'], [1550, '1550']];
+
+        var gpuCardHighlight = ui.powerProfile === 'performance' ? !!stats.gpu.active : false;
         var gpuInactive = !stats.gpu.active ? true : !ui.isGpuEnabled;
-        var cpuSpin = ((stats.fan.cpuPercent != null) ? stats.fan.cpuPercent : 0) > 0;
-        var gpuSpin = ((stats.fan.gpuPercent != null) ? stats.fan.gpuPercent : 0) > 0;
+        var cpuSpin = numOr(stats.fan.cpuPercent, 0) > 0;
+        var gpuSpin = numOr(stats.fan.gpuPercent, 0) > 0;
 
-        var batWattText = (stats.battery.watts === 0)
+        var batWatts = numOr(stats.battery.watts, 0);
+        var batWattText = (batWatts === 0)
           ? '0.0W'
-          : ((stats.battery.charging ? '+' : '') + stats.battery.watts.toFixed(1) + 'W');
+          : ((stats.battery.charging ? '+' : '') + batWatts.toFixed(1) + 'W');
 
         var batWattCls = stats.battery.charging
           ? (isDark ? 'text-emerald-300 font-semibold' : 'text-emerald-700 font-semibold')
-          : ((stats.battery.watts === 0) ? mutedText : (isDark ? 'text-amber-300' : 'text-amber-700'));
+          : ((batWatts === 0) ? mutedText : (isDark ? 'text-amber-300' : 'text-amber-700'));
 
+        var gpuClockCap = numOr(ui.gpuClockCap, 0);
         var gpuBtnText = gpuMissing
           ? '미검출'
-          : ((ui.gpuRequestedWatts < 0)
+          : ((numOr(ui.gpuRequestedWatts, 0) < 0)
             ? 'OFF'
-            : ((ui.gpuClockCap > 0)
-              ? ('≤' + Math.round(estWatts(ui.gpuClockCap)) + 'W' + ((ui.gpuClockCapApplied === ui.gpuClockCap) ? '' : '…'))
+            : ((gpuClockCap > 0)
+              ? ('≤' + Math.round(estWatts(gpuClockCap, spec.gpuMinW, fullGpuMaxW)) + 'W' + ((numOr(ui.gpuClockCapApplied, 0) === gpuClockCap) ? '' : '…'))
               : (fullGpuMaxW + 'W')));
 
-        return e('div', { className: 'w-screen h-screen flex flex-col p-3.5 gap-2 relative overflow-hidden select-none drag-region' }, [
+        var isTppActive = (ui.tppActive != null) ? !!ui.tppActive : !!ui.tpp250Active;
+        var isTppEnabledUi = (ui.tppAutoBalance != null)
+          ? !!ui.tppAutoBalance
+          : ((ui.tpp250AutoBalance != null) ? !!ui.tpp250AutoBalance : true);
+        var dispCpuPl1 = clampNum(numOr(ui.cpuPl1Watts, spec.cpuPresets[2].pl1), spec.cpuMinW, spec.cpuPl1MaxW);
+        var dispCpuPl2 = clampNum(numOr(ui.cpuPl2Watts, spec.cpuPresets[2].pl2), dispCpuPl1, spec.cpuPl2MaxW);
+        var cpuBtnText = isTppActive
+          ? (Math.round(cpuPowerMax) + 'W TPP')
+          : (dispCpuPl1 + '/' + dispCpuPl2 + 'W');
+
+        var pl1Label = spec.isAmd
+          ? ('STAPM / PL1 (지속 전력 · ' + spec.cpuMinW + '~' + spec.cpuPl1MaxW + 'W)')
+          : ('PL1 (지속 전력 · ' + spec.cpuMinW + '~' + spec.cpuPl1MaxW + 'W)');
+        var pl2Label = spec.isAmd
+          ? ('PPT Fast / PL2 (부스트 전력 · ' + spec.cpuMinW + '~' + spec.cpuPl2MaxW + 'W)')
+          : ('PL2 (부스트 전력 · ' + spec.cpuMinW + '~' + spec.cpuPl2MaxW + 'W)');
+        var tauLabel = spec.isAmd ? 'STAPM Tau (부스트 시정수)' : 'Tau (부스트 유지 시간)';
+
+        return e('div', {
+          onMouseDown: function (ev) {
+            if (!ev.target.closest('.no-drag')) {
+              window.dispatchEvent(new CustomEvent('omen-close-popovers'));
+            }
+          },
+          className: 'w-screen h-screen flex flex-col p-3.5 gap-2 relative overflow-hidden select-none drag-region'
+        }, [
           !isDark ? e('div', { key: 'ba', className: 'blob-a absolute top-[-20%] left-[-10%] w-[60%] h-[60%] rounded-full filter blur-[85px] pointer-events-none bg-sky-200/35' }) : null,
           !isDark ? e('div', { key: 'bb', className: 'blob-b absolute bottom-[-20%] right-[-10%] w-[70%] h-[70%] rounded-full filter blur-[105px] pointer-events-none bg-violet-200/35' }) : null,
           e('div', { key: 'hdr', className: 'flex items-center justify-between gap-2 px-1 shrink-0 relative z-10 min-w-0' }, [
@@ -790,11 +1052,11 @@
                     ? 'linear-gradient(90deg, #e2e8f0 0%, #c4b5fd 50%, #93c5fd 100%)'
                     : 'linear-gradient(90deg, #1e2433 0%, #5b21b6 50%, #0369a1 100%)'
                 }
-              }, 'OMEN MAX 16'),
+              }, headerTitle),
               e('p', { key: 'sub', className: subText + ' text-[8.5px] font-medium tracking-wider uppercase whitespace-nowrap truncate' },
                 isDark ? 'Matte Pastel · Control Center' : 'Pastel Ceramic · Control Center'
               ),
-              e(StatusDot, { key: 'dot', cpuTemp: stats.cpu.temp, gpuTemp: stats.gpu.temp, gpuActive: stats.gpu.active, voltage: stats.cpu.voltage })
+              e(StatusDot, { key: 'dot', cpuTemp: safeCpuTemp, gpuTemp: safeGpuTemp, gpuActive: !!stats.gpu.active, voltage: stats.cpu.voltage })
             ]),
             e('div', { key: 'tr', className: 'flex items-center gap-1.5 shrink-0' }, [
               e('button', {
@@ -835,27 +1097,27 @@
                     e('div', { key: 'tx', className: 'flex flex-col min-w-0 leading-tight' }, [
                       e('div', { key: 't1', className: 'flex items-center gap-1' }, [
                         e('span', { key: 'n', className: 'text-[10px] font-bold tracking-widest whitespace-nowrap ' + (isDark ? 'text-slate-300' : 'text-[#525d73]') }, 'CPU'),
-                        ui.tpp250Active ? e('span', { key: 'b', className: 'text-[7px] font-bold rounded px-1 py-0.5 tracking-wider whitespace-nowrap ' + (isDark ? 'text-sky-200 bg-[#1b2b3d] border border-sky-700/50' : 'text-sky-700 bg-sky-100 border border-sky-300/80') }, 'TPP 250W') : null
+                        isTppActive ? e('span', { key: 'b', className: 'text-[7px] font-bold rounded px-1 py-0.5 tracking-wider whitespace-nowrap ' + (isDark ? 'text-sky-200 bg-[#1b2b3d] border border-sky-700/50' : 'text-sky-700 bg-sky-100 border border-sky-300/80') }, 'TPP ' + tppCap + 'W') : null
                       ]),
-                      e('span', { key: 't2', className: 'text-[8px] ' + mutedText + ' whitespace-nowrap truncate' }, '(Ultra 9 275HX)')
+                      e('span', { key: 't2', className: 'text-[8px] ' + mutedText + ' whitespace-nowrap truncate', title: stats.cpu.name || cpuShortName }, '(' + cpuShortName + ')')
                     ])
                   ]),
                   e('div', { key: 'r', className: 'flex items-baseline gap-2 flex-shrink-0 ml-auto' }, [
                     e('div', { key: 'm', className: 'flex flex-col items-end leading-tight' }, [
-                      (stats.cpu.fps != null) ? e('span', { key: 'fps', className: 'text-[9px] font-mono font-semibold whitespace-nowrap pop-in ' + (isDark ? 'text-emerald-300' : 'text-emerald-700') }, stats.cpu.fps.toFixed(0) + ' FPS') : null,
-                      e('span', { key: 'v', className: 'text-[9px] font-mono whitespace-nowrap ' + (isDark ? 'text-teal-300' : 'text-teal-700') }, (stats.cpu.voltage != null) ? (stats.cpu.voltage.toFixed(3) + ' V') : '-- V'),
-                      e('span', { key: 'c', className: 'text-[11px] font-mono font-semibold whitespace-nowrap ' + (isDark ? 'text-sky-300' : 'text-sky-700') }, stats.cpu.clock.toFixed(2) + ' GHz')
+                      (stats.cpu.fps != null && Number.isFinite(Number(stats.cpu.fps))) ? e('span', { key: 'fps', className: 'text-[9px] font-mono font-semibold whitespace-nowrap pop-in ' + (isDark ? 'text-emerald-300' : 'text-emerald-700') }, Number(stats.cpu.fps).toFixed(0) + ' FPS') : null,
+                      e('span', { key: 'v', className: 'text-[9px] font-mono whitespace-nowrap ' + (isDark ? 'text-teal-300' : 'text-teal-700') }, (stats.cpu.voltage != null && Number.isFinite(Number(stats.cpu.voltage))) ? (Number(stats.cpu.voltage).toFixed(3) + ' V') : '-- V'),
+                      e('span', { key: 'c', className: 'text-[11px] font-mono font-semibold whitespace-nowrap ' + (isDark ? 'text-sky-300' : 'text-sky-700') }, numOr(stats.cpu.clock, 0).toFixed(2) + ' GHz')
                     ]),
                     e('div', {
                       key: 't',
-                      style: { textShadow: tempGlow(stats.cpu.temp, isDark) },
-                      className: 'text-2xl font-semibold tracking-tight leading-none whitespace-nowrap tabular-nums transition-colors duration-500 ' + tempTone(stats.cpu.temp, isDark)
+                      style: { textShadow: tempGlow(safeCpuTemp, isDark) },
+                      className: 'text-2xl font-semibold tracking-tight leading-none whitespace-nowrap tabular-nums transition-colors duration-500 ' + tempTone(safeCpuTemp, isDark)
                     }, [Math.round(cpuTempSmooth), e('span', { key: 'u', className: 'text-sm ' + mutedText + ' ml-0.5' }, '°C')])
                   ])
                 ]),
                 e('div', { key: 'bars', className: 'flex ' + (gpuMissing ? 'flex-row gap-4' : 'flex-col gap-1.5') + ' mt-auto' }, [
-                  e(ProgressBar, { key: 'u', label: 'USAGE', value: stats.cpu.usage, subLabel: stats.cpu.usage.toFixed(0) + '%', colorClass: 'bg-sky-400', isDark: isDark }),
-                  e(ProgressBar, { key: 'p', label: 'POWER', value: stats.cpu.power, max: cpuPowerMax, subLabel: stats.cpu.power.toFixed(1) + ' / ' + cpuPowerMax + ' W', colorClass: 'bg-violet-400', isDark: isDark })
+                  e(ProgressBar, { key: 'u', label: 'USAGE', value: numOr(stats.cpu.usage, 0), subLabel: numOr(stats.cpu.usage, 0).toFixed(0) + '%', colorClass: 'bg-sky-400', isDark: isDark }),
+                  e(ProgressBar, { key: 'p', label: 'POWER', value: numOr(stats.cpu.power, 0), max: cpuPowerMax, subLabel: numOr(stats.cpu.power, 0).toFixed(1) + ' / ' + Math.round(cpuPowerMax) + ' W', colorClass: 'bg-violet-400', isDark: isDark })
                 ])
               ]),
 
@@ -872,21 +1134,21 @@
                         e('span', { key: 'n', className: 'text-[10px] font-bold tracking-widest ' + (isDark ? 'text-slate-300' : 'text-[#525d73]') }, 'GPU'),
                         ui.gpuDynamicBoost ? e('span', { key: 'b', className: 'text-[7px] font-bold rounded px-1 py-0.5 tracking-wider ' + (isDark ? 'text-violet-200 bg-[#282340] border border-violet-700/50' : 'text-violet-700 bg-violet-100 border border-violet-300/80') }, 'BOOST') : null
                       ]),
-                      e('span', { key: 't2', className: 'text-[8px] ' + mutedText + ' whitespace-nowrap truncate' }, '(RTX 5070 Ti)')
+                      e('span', { key: 't2', className: 'text-[8px] ' + mutedText + ' whitespace-nowrap truncate', title: stats.gpu.name || gpuShortName }, '(' + gpuShortName + ')')
                     ])
                   ]),
                   e('div', { key: 'r', className: 'flex items-baseline gap-2' }, [
-                    e('span', { key: 'c', className: 'text-[11px] font-mono font-semibold ' + (isDark ? 'text-violet-300' : 'text-violet-700') }, stats.gpu.active ? (stats.gpu.clock.toFixed(2) + ' GHz') : 'OFF'),
+                    e('span', { key: 'c', className: 'text-[11px] font-mono font-semibold ' + (isDark ? 'text-violet-300' : 'text-violet-700') }, stats.gpu.active ? (numOr(stats.gpu.clock, 0).toFixed(2) + ' GHz') : 'OFF'),
                     e('div', {
                       key: 't',
-                      style: { textShadow: stats.gpu.active ? tempGlow(stats.gpu.temp, isDark) : 'none' },
-                      className: 'text-2xl font-semibold tracking-tight leading-none tabular-nums transition-colors duration-500 ' + (stats.gpu.active ? tempTone(stats.gpu.temp, isDark) : mutedText)
+                      style: { textShadow: stats.gpu.active ? tempGlow(safeGpuTemp, isDark) : 'none' },
+                      className: 'text-2xl font-semibold tracking-tight leading-none tabular-nums transition-colors duration-500 ' + (stats.gpu.active ? tempTone(safeGpuTemp, isDark) : mutedText)
                     }, [stats.gpu.active ? Math.round(gpuTempSmooth) : '--', e('span', { key: 'u', className: 'text-sm ' + mutedText + ' ml-0.5' }, '°C')])
                   ])
                 ]),
                 e('div', { key: 'bars', className: 'flex flex-col gap-1.5 mt-auto' }, [
-                  e(ProgressBar, { key: 'u', label: 'USAGE', value: stats.gpu.usage, subLabel: stats.gpu.usage.toFixed(0) + '%', colorClass: 'bg-purple-400', inactive: !stats.gpu.active, isDark: isDark }),
-                  e(ProgressBar, { key: 'p', label: 'POWER', value: stats.gpu.power, max: gpuPowerMax, subLabel: stats.gpu.power.toFixed(1) + ' / ' + gpuPowerMax + ' W', colorClass: 'bg-pink-400', inactive: !stats.gpu.active, isDark: isDark })
+                  e(ProgressBar, { key: 'u', label: 'USAGE', value: numOr(stats.gpu.usage, 0), subLabel: numOr(stats.gpu.usage, 0).toFixed(0) + '%', colorClass: 'bg-purple-400', inactive: !stats.gpu.active, isDark: isDark }),
+                  e(ProgressBar, { key: 'p', label: 'POWER', value: numOr(stats.gpu.power, 0), max: gpuPowerMax, subLabel: numOr(stats.gpu.power, 0).toFixed(1) + ' / ' + Math.round(gpuPowerMax) + ' W', colorClass: 'bg-pink-400', inactive: !stats.gpu.active, isDark: isDark })
                 ])
               ]) : null
             ]),
@@ -915,10 +1177,10 @@
                       e('div', {
                         key: 'ic',
                         className: 'p-1.5 rounded-full shrink-0 transition-transform duration-200 hover:scale-105 ' + (isDark ? 'bg-[#1c2e29] text-emerald-300' : 'bg-emerald-100/90 text-emerald-600') + ' ' + (stats.battery.charging ? 'charge-pulse' : '')
-                      }, e(IconBattery, { level: stats.battery.percent, className: 'w-4 h-4' })),
+                      }, e(IconBattery, { level: numOr(stats.battery.percent, 0), className: 'w-4 h-4' })),
                       e('div', { key: 'tx', className: 'flex flex-col justify-center leading-tight min-w-0' }, [
                         e('div', { key: 'pct', className: 'flex items-baseline gap-0.5' }, [
-                          e('span', { key: 'n', className: 'text-[19px] font-semibold leading-none tabular-nums ' + strongText }, stats.battery.percent),
+                          e('span', { key: 'n', className: 'text-[19px] font-semibold leading-none tabular-nums ' + strongText }, Math.round(numOr(stats.battery.percent, 0))),
                           e('span', { key: 'u', className: 'text-[9.5px] font-mono ' + subText }, '%')
                         ]),
                         e('span', { key: 'w', className: 'text-[8.5px] font-mono tracking-wider mt-0.5 leading-none whitespace-nowrap transition-colors duration-300 ' + batWattCls }, batWattText)
@@ -929,7 +1191,7 @@
                       onClick: function () { sendCmd('TOGGLE_BATTERY_LOCK'); },
                       className: 'no-drag p-1.5 rounded-full shrink-0 transition-all duration-200 border cursor-pointer hover:scale-105 active:scale-95 ' +
                         (ui.isLocked ? (isDark ? 'bg-[#2a2542] border-[#594b87] text-violet-200' : 'bg-violet-100 border-violet-300 text-violet-700') : (isDark ? 'bg-[#151822] border-[#2a2f42] text-slate-400 hover:text-slate-200' : 'bg-[#f6f7fb] border-[#e4e8f1] text-[#94a3b8] hover:text-[#4b5563]'))
-                    }, e(IconLock, { className: 'w-3.5 h-3.5', isLocked: ui.isLocked }))
+                    }, e(IconLock, { className: 'w-3.5 h-3.5', isLocked: !!ui.isLocked }))
                   ])
                 ),
 
@@ -952,9 +1214,9 @@
               e('div', { key: 'bot', className: 'grid grid-cols-3 gap-2.5 flex-1 min-h-0' }, [
                 e('div', { key: 'disp', className: 'relative' },
                   e(GlassCard, { isDark: isDark, className: 'p-1.5 flex items-center h-full', delay: 480 },
-                    e(GlassButton, { active: ui.refreshRate === 240, onClick: function () { sendCmd('TOGGLE_REFRESH_RATE'); }, isRow: true, className: 'flex-1 h-full' }, [
+                    e(GlassButton, { active: numOr(ui.refreshRate, 240) === 240, onClick: function () { sendCmd('TOGGLE_REFRESH_RATE'); }, isRow: true, className: 'flex-1 h-full' }, [
                       e('span', { key: 'l', className: 'text-[9px] ' + subText + ' whitespace-nowrap' }, 'DISPLAY'),
-                      e('span', { key: 'v', className: 'text-[11px] font-bold whitespace-nowrap' }, ui.refreshRate + 'Hz')
+                      e('span', { key: 'v', className: 'text-[11px] font-bold whitespace-nowrap' }, numOr(ui.refreshRate, 240) + 'Hz')
                     ])
                   )
                 ),
@@ -962,44 +1224,54 @@
                 e('div', { key: 'cpup', className: 'relative' }, [
                   e(GlassCard, { key: 'c', isDark: isDark, className: 'p-1.5 flex items-center h-full', delay: 540 },
                     e(GlassButton, {
+                      active: cpuPowerModal.open,
                       onClick: function () {
-                        sendCmd('OPEN_CPU_POWER');
-                        setCpuPowerModal(function (m) {
-                          return Object.assign({}, m, {
-                            open: !m.open,
-                            pl1: (ui.cpuPl1Watts != null) ? ui.cpuPl1Watts : m.pl1,
-                            pl2: (ui.cpuPl2Watts != null) ? ui.cpuPl2Watts : m.pl2,
-                            tau: (ui.cpuTauSeconds != null) ? ui.cpuTauSeconds : m.tau,
-                            tpp250: (ui.tpp250AutoBalance != null) ? ui.tpp250AutoBalance : m.tpp250,
-                            tppCpu: (ui.tppCpuWatts != null) ? ui.tppCpuWatts : m.tppCpu
-                          });
+                        var nextOpen = !cpuPowerModal.open;
+                        if (nextOpen) {
+                          sendCmd('OPEN_CPU_POWER');
+                          setGpuModal(function (g) { return g.open ? Object.assign({}, g, { open: false }) : g; });
+                        }
+                        var initP1 = clampNum(numOr(ui.cpuPl1Watts, spec.cpuPresets[2].pl1), spec.cpuMinW, spec.cpuPl1MaxW);
+                        var initP2 = clampNum(numOr(ui.cpuPl2Watts, spec.cpuPresets[2].pl2), initP1, spec.cpuPl2MaxW);
+                        var initTc = clampNum(numOr(ui.tppCpuWatts, spec.cpuPresets[2].tppCpu), spec.tppCpuMinW, spec.tppCpuMaxW);
+                        setCpuPowerModal({
+                          open: nextOpen,
+                          pl1: initP1,
+                          pl2: initP2,
+                          tau: clampNum(numOr(ui.cpuTauSeconds, 32), 1, 56),
+                          tppAutoBalance: isTppEnabledUi,
+                          tppCpu: initTc
                         });
                       },
                       isRow: true,
                       className: 'flex-1 h-full'
                     }, [
                       e('span', { key: 'l', className: 'text-[9px] ' + subText + ' whitespace-nowrap' }, 'CPU 전력'),
-                      e('span', { key: 'v', className: 'text-[11px] font-bold font-mono whitespace-nowrap ' + (isDark ? 'text-sky-300' : 'text-sky-700') },
-                        ui.tpp250Active ? (ui.cpuEffectivePl2Watts + 'W TPP') : (ui.cpuPl1Watts + '/' + ui.cpuPl2Watts + 'W')
-                      )
+                      e('span', { key: 'v', className: 'text-[11px] font-bold font-mono whitespace-nowrap ' + (isDark ? 'text-sky-300' : 'text-sky-700') }, cpuBtnText)
                     ])
                   ),
-                  cpuPowerModal.open ? e(Popover, { key: 'cpup-pop', align: 'center', width: 320, isDark: isDark }, [
-                    e('div', { key: 'h', className: 'flex items-center justify-between' }, [
-                      e('h2', { key: 't', className: 'text-[11px] font-bold ' + strongText }, 'CPU 게이밍 전력 제한 (275HX · 15~160W)'),
+                  cpuPowerModal.open ? e(Popover, { key: 'cpup-pop', align: 'center', width: 326, isDark: isDark }, [
+                    e('div', { key: 'h', className: 'flex items-center justify-between gap-1' }, [
+                      e('h2', { key: 't', className: 'text-[11px] font-bold truncate ' + strongText }, 'CPU 전력 제한 (' + cpuShortName + ' · ' + spec.cpuMinW + '~' + spec.cpuPl2MaxW + 'W)'),
                       e('button', {
                         key: 'x', type: 'button',
                         onClick: function () { setCpuPowerModal(function (m) { return Object.assign({}, m, { open: false }); }); },
-                        className: 'no-drag px-1.5 py-0.5 rounded text-[10px] ' + subText + ' hover:opacity-80 cursor-pointer'
+                        className: 'no-drag px-1.5 py-0.5 rounded text-[10px] ' + subText + ' hover:opacity-80 cursor-pointer shrink-0'
                       }, '✕')
                     ]),
-                    e('div', { key: 'pr', className: 'grid grid-cols-5 gap-1' }, CPU_PRESETS.map(function (p) {
-                      var act = (cpuPowerModal.pl1 === p.pl1 && cpuPowerModal.pl2 === p.pl2) ? 'is-active' : '';
+                    e('div', { key: 'pr', className: 'grid grid-cols-5 gap-1' }, spec.cpuPresets.map(function (p) {
+                      var act = (clampedModalPl1 === p.pl1 && clampedModalPl2 === p.pl2) ? 'is-active' : '';
                       return e('button', {
                         key: p.label, type: 'button', title: p.desc,
                         onClick: function () {
                           setCpuPowerModal(function (m) {
-                            return Object.assign({}, m, { pl1: p.pl1, pl2: p.pl2, tpp250: p.tpp, tppCpu: p.tppCpu });
+                            return Object.assign({}, m, {
+                              pl1: p.pl1,
+                              pl2: p.pl2,
+                              tau: (p.tau != null) ? p.tau : m.tau,
+                              tppAutoBalance: p.tpp,
+                              tppCpu: p.tppCpu
+                            });
                           });
                         },
                         className: 'no-drag interactive-btn ' + act + ' py-1 px-1 rounded-lg border flex flex-col items-center leading-none cursor-pointer'
@@ -1011,35 +1283,45 @@
                     e('div', { key: 'sl', className: 'flex flex-col gap-1' }, [
                       e('div', { key: 's1' }, [
                         e('div', { key: 't', className: 'flex justify-between text-[8.5px] ' + subText + ' mb-0.5' }, [
-                          e('span', { key: 'l' }, 'PL1 (지속 전력)'),
-                          e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-sky-300' : 'text-sky-700') }, cpuPowerModal.pl1 + 'W')
+                          e('span', { key: 'l' }, pl1Label),
+                          e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-sky-300' : 'text-sky-700') }, clampedModalPl1 + 'W')
                         ]),
                         e('input', {
-                          key: 'i', type: 'range', min: 15, max: 160, step: 5, value: cpuPowerModal.pl1,
+                          key: 'i', type: 'range', min: spec.cpuMinW, max: spec.cpuPl1MaxW, step: 1, value: clampedModalPl1,
                           onChange: function (ev) {
                             var v = parseInt(ev.target.value, 10);
-                            setCpuPowerModal(function (m) { return Object.assign({}, m, { pl1: v, pl2: Math.max(m.pl2, v) }); });
+                            setCpuPowerModal(function (m) {
+                              return Object.assign({}, m, {
+                                pl1: v,
+                                pl2: clampNum(Math.max(m.pl2, v), v, spec.cpuPl2MaxW)
+                              });
+                            });
                           },
                           className: 'w-full cursor-pointer'
                         })
                       ]),
                       e('div', { key: 's2' }, [
                         e('div', { key: 't', className: 'flex justify-between text-[8.5px] ' + subText + ' mb-0.5' }, [
-                          e('span', { key: 'l' }, 'PL2 (부스트 전력)'),
-                          e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-amber-300' : 'text-amber-700') }, cpuPowerModal.pl2 + 'W')
+                          e('span', { key: 'l' }, pl2Label),
+                          e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-amber-300' : 'text-amber-700') }, clampedModalPl2 + 'W')
                         ]),
                         e('input', {
-                          key: 'i', type: 'range', min: 15, max: 160, step: 5, value: cpuPowerModal.pl2,
+                          key: 'i', type: 'range', min: spec.cpuMinW, max: spec.cpuPl2MaxW, step: 1, value: clampedModalPl2,
                           onChange: function (ev) {
                             var v = parseInt(ev.target.value, 10);
-                            setCpuPowerModal(function (m) { return Object.assign({}, m, { pl2: v, pl1: Math.min(m.pl1, v) }); });
+                            setCpuPowerModal(function (m) {
+                              return Object.assign({}, m, {
+                                pl2: v,
+                                pl1: clampNum(Math.min(m.pl1, v), spec.cpuMinW, Math.min(spec.cpuPl1MaxW, v))
+                              });
+                            });
                           },
                           className: 'w-full cursor-pointer'
                         })
                       ]),
                       e('div', { key: 's3' }, [
                         e('div', { key: 't', className: 'flex justify-between text-[8.5px] ' + subText + ' mb-0.5' }, [
-                          e('span', { key: 'l' }, 'Tau (부스트 유지 시간)'),
+                          e('span', { key: 'l' }, tauLabel),
                           e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-violet-300' : 'text-violet-700') }, cpuPowerModal.tau + '초')
                         ]),
                         e('input', {
@@ -1055,22 +1337,22 @@
                     e('div', { key: 'tpp', className: 'flex flex-col gap-1 rounded-xl px-2.5 py-1.5 border ' + (isDark ? 'bg-[#141721] border-[#292e42]' : 'bg-[#f6f7fb] border-[#e4e8f1]') }, [
                       e('div', { key: 'r', className: 'flex items-center justify-between gap-2' }, [
                         e('div', { key: 'tx', className: 'flex flex-col leading-tight' }, [
-                          e('span', { key: '1', className: 'text-[9.5px] font-semibold ' + strongText }, 'TPP 250W 게이밍 동적 배분'),
-                          e('span', { key: '2', className: 'text-[7.5px] ' + subText }, 'GPU 고부하 시 CPU ' + cpuPowerModal.tppCpu + 'W + GPU ' + (250 - cpuPowerModal.tppCpu) + 'W 균형 유지')
+                          e('span', { key: '1', className: 'text-[9.5px] font-semibold ' + strongText }, 'TPP ' + tppCap + 'W 게이밍 동적 배분'),
+                          e('span', { key: '2', className: 'text-[7.5px] ' + subText }, 'GPU 고부하 시 CPU ' + clampedModalTppCpu + 'W + GPU ' + Math.max(0, tppCap - clampedModalTppCpu) + 'W 균형 유지')
                         ]),
                         e(ToggleSwitch, {
-                          key: 'tg', checked: cpuPowerModal.tpp250,
-                          onChange: function (v) { setCpuPowerModal(function (m) { return Object.assign({}, m, { tpp250: v }); }); },
+                          key: 'tg', checked: !!cpuPowerModal.tppAutoBalance,
+                          onChange: function (v) { setCpuPowerModal(function (m) { return Object.assign({}, m, { tppAutoBalance: v }); }); },
                           isDark: isDark
                         })
                       ]),
-                      cpuPowerModal.tpp250 ? e('div', { key: 'sub', className: 'pt-1 border-t ' + (isDark ? 'border-[#292e42]' : 'border-[#e4e8f1]') }, [
+                      cpuPowerModal.tppAutoBalance ? e('div', { key: 'sub', className: 'pt-1 border-t ' + (isDark ? 'border-[#292e42]' : 'border-[#e4e8f1]') }, [
                         e('div', { key: 't', className: 'flex justify-between text-[7.5px] ' + subText + ' mb-0.5' }, [
-                          e('span', { key: 'l' }, '동시 부하 시 CPU 상한'),
-                          e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-sky-300' : 'text-sky-700') }, cpuPowerModal.tppCpu + 'W (GPU ' + (250 - cpuPowerModal.tppCpu) + 'W 여유)')
+                          e('span', { key: 'l' }, '동시 부하 시 CPU 상한 (' + spec.tppCpuMinW + '~' + spec.tppCpuMaxW + 'W)'),
+                          e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-sky-300' : 'text-sky-700') }, clampedModalTppCpu + 'W (GPU ' + Math.max(0, tppCap - clampedModalTppCpu) + 'W 여유)')
                         ]),
                         e('input', {
-                          key: 'i', type: 'range', min: 55, max: 105, step: 5, value: cpuPowerModal.tppCpu,
+                          key: 'i', type: 'range', min: spec.tppCpuMinW, max: spec.tppCpuMaxW, step: 1, value: clampedModalTppCpu,
                           onChange: function (ev) {
                             var v = parseInt(ev.target.value, 10);
                             setCpuPowerModal(function (m) { return Object.assign({}, m, { tppCpu: v }); });
@@ -1090,12 +1372,26 @@
                         e('button', {
                           key: 's', type: 'button',
                           onClick: function () {
-                            sendCmd('SAVE_CPU_POWER', {
-                              pl1: cpuPowerModal.pl1,
-                              pl2: cpuPowerModal.pl2,
+                            var payload = {
+                              pl1: clampedModalPl1,
+                              pl2: clampedModalPl2,
                               tau: cpuPowerModal.tau,
-                              tpp250AutoBalance: cpuPowerModal.tpp250,
-                              tppCpuWatts: cpuPowerModal.tppCpu
+                              tppAutoBalance: !!cpuPowerModal.tppAutoBalance,
+                              tpp250AutoBalance: !!cpuPowerModal.tppAutoBalance,
+                              tppCpuWatts: clampedModalTppCpu
+                            };
+                            sendCmd('SAVE_CPU_POWER', payload);
+                            setStats(function (prev) {
+                              return Object.assign({}, prev, {
+                                ui: Object.assign({}, prev.ui, {
+                                  cpuPl1Watts: payload.pl1,
+                                  cpuPl2Watts: payload.pl2,
+                                  cpuTauSeconds: payload.tau,
+                                  tppAutoBalance: payload.tppAutoBalance,
+                                  tpp250AutoBalance: payload.tpp250AutoBalance,
+                                  tppCpuWatts: payload.tppCpuWatts
+                                })
+                              });
                             });
                             setCpuPowerModal(function (m) { return Object.assign({}, m, { open: false }); });
                           },
@@ -1106,31 +1402,50 @@
                   ]) : null]),
                 e('div', { key: 'gpup', className: 'relative' }, [
                   e(GlassCard, { key: 'c', isDark: isDark, className: 'p-1.5 flex items-center h-full', delay: 600 },
-                    e(GlassButton, { disabled: gpuMissing, onClick: function () { setGpuModal({ open: true, cap: ui.gpuClockCap ? ui.gpuClockCap : 0 }); }, isRow: true, className: 'flex-1 h-full' }, [
+                    e(GlassButton, {
+                      active: gpuModal.open,
+                      disabled: gpuMissing,
+                      onClick: function () {
+                        var nextOpen = !gpuModal.open;
+                        if (nextOpen) {
+                          setCpuPowerModal(function (m) { return m.open ? Object.assign({}, m, { open: false }) : m; });
+                        }
+                        setGpuModal({ open: nextOpen, cap: gpuClockCap });
+                      },
+                      isRow: true,
+                      className: 'flex-1 h-full'
+                    }, [
                       e('span', { key: 'l', className: 'text-[9px] ' + subText + ' whitespace-nowrap' }, 'GPU'),
                       e('span', {
                         key: 'v',
-                        className: 'text-[11px] font-bold font-mono whitespace-nowrap ' + ((ui.gpuRequestedWatts < 0) ? (isDark ? 'text-rose-300' : 'text-rose-600') : (isDark ? 'text-violet-300' : 'text-violet-700'))
+                        className: 'text-[11px] font-bold font-mono whitespace-nowrap ' + ((numOr(ui.gpuRequestedWatts, 0) < 0) ? (isDark ? 'text-rose-300' : 'text-rose-600') : (isDark ? 'text-violet-300' : 'text-violet-700'))
                       }, gpuBtnText)
                     ])
                   ),
-                  gpuModal.open ? e(Popover, { key: 'pop', align: 'right', width: 300, isDark: isDark }, [
-                    e('h2', { key: 'h', className: 'text-[11px] font-bold ' + strongText }, 'GPU 전력 제어 (RTX 5070 Ti · 140~175W)'),
+                  gpuModal.open ? e(Popover, { key: 'pop', align: 'right', width: 306, isDark: isDark }, [
+                    e('div', { key: 'h', className: 'flex items-center justify-between gap-1' }, [
+                      e('h2', { key: 't', className: 'text-[11px] font-bold truncate ' + strongText }, 'GPU 전력 제어 (' + gpuShortName + ' · ' + spec.gpuMinW + '~' + baseGpuCap + 'W)'),
+                      e('button', {
+                        key: 'x', type: 'button',
+                        onClick: function () { setGpuModal(function (m) { return Object.assign({}, m, { open: false }); }); },
+                        className: 'no-drag px-1.5 py-0.5 rounded text-[10px] ' + subText + ' hover:opacity-80 cursor-pointer shrink-0'
+                      }, '✕')
+                    ]),
                     e('p', { key: 'st', className: 'text-[8.5px] ' + subText }, ui.gpuModeStatus),
                     e('div', { key: 'sw', className: 'flex flex-col gap-1 rounded-xl px-2.5 py-1.5 border ' + (isDark ? 'bg-[#141721] border-[#292e42]' : 'bg-[#f6f7fb] border-[#e4e8f1]') }, [
                       e('div', { key: 'ct', className: 'flex items-center justify-between' }, [
                         e('div', { key: 'tx', className: 'flex flex-col leading-tight' }, [
-                          e('span', { key: '1', className: 'text-[9.5px] font-semibold ' + strongText }, 'cTGP 확장 (140W → 175W)'),
-                          e('span', { key: '2', className: 'text-[7.5px] ' + subText }, 'HP BIOS 커스텀 TGP 상한 활성화')
+                          e('span', { key: '1', className: 'text-[9.5px] font-semibold ' + strongText }, 'cTGP 확장 (' + spec.gpuBaseNoCtgpW + 'W → ' + baseGpuNoDb + 'W)'),
+                          e('span', { key: '2', className: 'text-[7.5px] ' + subText }, 'HP BIOS 커스텀 기본 TGP 상한 활성화')
                         ]),
-                        e(ToggleSwitch, { key: 'tg', checked: ui.gpuCtgp, onChange: function (v) { sendCmd('SET_GPU_POWER', { ctgp: v, ppab: ui.gpuDynamicBoost, dstate: 1 }); }, isDark: isDark })
+                        e(ToggleSwitch, { key: 'tg', checked: !!ui.gpuCtgp, onChange: function (v) { sendCmd('SET_GPU_POWER', { ctgp: v, ppab: !!ui.gpuDynamicBoost, dstate: 1 }); }, isDark: isDark })
                       ]),
                       e('div', { key: 'db', className: 'flex items-center justify-between pt-1 border-t ' + (isDark ? 'border-[#292e42]' : 'border-[#e4e8f1]') }, [
                         e('div', { key: 'tx', className: 'flex flex-col leading-tight' }, [
-                          e('span', { key: '1', className: 'text-[9.5px] font-semibold ' + strongText }, 'Dynamic Boost (PPAB +35W)'),
-                          e('span', { key: '2', className: 'text-[7.5px] ' + subText }, 'CPU 여유 전력을 GPU 175W로 동적 배분')
+                          e('span', { key: '1', className: 'text-[9.5px] font-semibold ' + strongText }, 'Dynamic Boost (PPAB +' + dbBonus + 'W)'),
+                          e('span', { key: '2', className: 'text-[7.5px] ' + subText }, 'CPU 여유 전력을 GPU 최대 ' + fullGpuMaxW + 'W로 동적 배분')
                         ]),
-                        e(ToggleSwitch, { key: 'tg', checked: ui.gpuDynamicBoost, onChange: function (v) { sendCmd('SET_GPU_POWER', { ctgp: ui.gpuCtgp, ppab: v, dstate: 1 }); }, isDark: isDark })
+                        e(ToggleSwitch, { key: 'tg', checked: !!ui.gpuDynamicBoost, onChange: function (v) { sendCmd('SET_GPU_POWER', { ctgp: !!ui.gpuCtgp, ppab: v, dstate: 1 }); }, isDark: isDark })
                       ])
                     ]),
                     e('div', { key: 'pr', className: 'grid grid-cols-3 gap-1' }, GPU_PRESETS.map(function (item) {
@@ -1142,7 +1457,7 @@
                         className: 'no-drag interactive-btn ' + act + ' py-1 rounded-lg border flex flex-col items-center leading-none cursor-pointer'
                       }, [
                         e('span', { key: 'l', className: 'text-[9.5px] font-semibold' }, l),
-                        e('span', { key: 'w', className: 'text-[7.5px] ' + mutedText + ' mt-0.5' }, v ? ('≈' + Math.round(estWatts(v)) + 'W') : ('≈' + fullGpuMaxW + 'W'))
+                        e('span', { key: 'w', className: 'text-[7.5px] ' + mutedText + ' mt-0.5' }, v ? ('≈' + Math.round(estWatts(v, spec.gpuMinW, fullGpuMaxW)) + 'W') : ('≈' + fullGpuMaxW + 'W'))
                       ]);
                     })),
                     e('div', { key: 'sl', className: 'flex items-center gap-2' }, [
@@ -1193,10 +1508,8 @@
         if (ev.button !== 0) return;
         if (ev.target.closest('.no-drag, input, button, #curve-modal')) return;
         if (ev.target.closest('.drag-region')) {
-          if (window.chrome) {
-            if (window.chrome.webview) {
-              window.chrome.webview.postMessage({ cmd: 'DRAG_WINDOW' });
-            }
+          if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage({ cmd: 'DRAG_WINDOW' });
           }
         }
       });
@@ -1222,7 +1535,7 @@
       .curve-tab.active-gpu{background:rgba(167,139,250,.18);border-color:rgba(167,139,250,.5);color:#6d28d9}
       html[data-theme="dark"] .curve-tab.active-gpu{background:#282340;border-color:#594b87;color:#ddd6fe}
       #curve-main{display:flex;flex:1;min-height:0;gap:7px}.curve-y{display:flex;flex-direction:column;justify-content:space-between;width:35px;padding-bottom:20px;text-align:right;color:var(--btn-text);opacity:.75;font:11px Consolas,monospace}
-      .curve-plot{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
+      .curve-plot{display:flex;flex:1;min-width:0;min-height:0}
       #curve-svg{width:100%;flex:1;min-height:0;touch-action:none;border-radius:9px;border:1px solid var(--popover-border);background-color:var(--card-bg);background-image:linear-gradient(to right,var(--btn-border) 1px,transparent 1px),linear-gradient(to bottom,var(--btn-border) 1px,transparent 1px);background-size:20% 20%;cursor:crosshair}
       .curve-x{height:20px;display:flex;justify-content:space-between;padding-top:5px;color:var(--btn-text);opacity:.75;font:11px Consolas,monospace}
       .curve-bottom{margin-top:12px}.curve-help{font-size:11px;color:var(--btn-text);opacity:.75}.curve-error{color:#e11d48;font-size:11px;min-height:15px;margin-top:6px}
@@ -1389,35 +1702,41 @@
         if(curves.cpu.length<2)return;
         if(curves.gpu.length<2)return;
         saving=true;error.textContent='저장 중...';
-        window.chrome.webview.postMessage({cmd:(kind==='quiet')?'SAVE_QUIET_CURVE':'SAVE_CUSTOM_CURVE',points:{cpu:curves.cpu,gpu:curves.gpu}});
+        if(window.chrome && window.chrome.webview){
+          window.chrome.webview.postMessage({cmd:(kind==='quiet')?'SAVE_QUIET_CURVE':'SAVE_CUSTOM_CURVE',points:{cpu:curves.cpu,gpu:curves.gpu}});
+        }else{
+          saving=false;close();
+        }
       });
       document.addEventListener('keydown',function(ev){
         if(ev.key==='Escape'){
           if(modal.classList.contains('open')){ev.stopPropagation();close();}
-          else { window.dispatchEvent(new CustomEvent('omen-close-cpu-modal')); }
+          else { window.dispatchEvent(new CustomEvent('omen-close-popovers')); }
         }
       },true);
-      window.chrome.webview.addEventListener('message',function(ev){
-        var m=ev.data;
-        if(m){
-          if(m.cmd==='OPEN_CURVE'){
-            kind=(m.kind==='quiet')?'quiet':'cool';
-            function toArr(arr){
-              return Array.isArray(arr)?arr.map(function(p){return {TemperatureCelsius:Number(p.TemperatureCelsius),FanPercent:Math.min(Number(p.FanPercent),yMax())};}).sort(function(a,b){return a.TemperatureCelsius-b.TemperatureCelsius;}):[];
+      if(window.chrome && window.chrome.webview){
+        window.chrome.webview.addEventListener('message',function(ev){
+          var m=ev.data;
+          if(m){
+            if(m.cmd==='OPEN_CURVE'){
+              kind=(m.kind==='quiet')?'quiet':'cool';
+              function toArr(arr){
+                return Array.isArray(arr)?arr.map(function(p){return {TemperatureCelsius:Number(p.TemperatureCelsius),FanPercent:Math.min(Number(p.FanPercent),yMax())};}).sort(function(a,b){return a.TemperatureCelsius-b.TemperatureCelsius;}):[];
+              }
+              curves.cpu=toArr(m.points ? m.points.cpu : null);
+              curves.gpu=toArr(m.points ? m.points.gpu : null);
+              activeFan='cpu';
+              saving=false;error.textContent='';
+              applyKindTheme();
+              updateTabStyle();
+              modal.classList.add('open');draw();
+            }else if(m.cmd==='CURVE_SAVE_RESULT'){
+              saving=false;
+              if(m.ok)close();else error.textContent=m.error ? m.error : '저장 실패';
             }
-            curves.cpu=toArr(m.points ? m.points.cpu : null);
-            curves.gpu=toArr(m.points ? m.points.gpu : null);
-            activeFan='cpu';
-            saving=false;error.textContent='';
-            applyKindTheme();
-            updateTabStyle();
-            modal.classList.add('open');draw();
-          }else if(m.cmd==='CURVE_SAVE_RESULT'){
-            saving=false;
-            if(m.ok)close();else error.textContent=m.error ? m.error : '저장 실패';
           }
-        }
-      });
+        });
+      }
     })();
     </script>
 </body>
