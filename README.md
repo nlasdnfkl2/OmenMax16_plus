@@ -1,7 +1,7 @@
 # OMEN MAX 16 Control Center 개발 현황 및 로드맵
 
 ## 1. 개요
-본 문서는 **OMEN MAX 16 Control Center**(`Form.html` / `Form_2.html` 기준 WebView2 기반 프론트엔드 및 제어 인터페이스)의 현재까지의 개발 진척도, 주요 구현 기능, 향후 모델 확장 방향, 그리고 현재 기술적 한계를 정리한 문서입니다.
+본 문서는 **OMEN MAX 16 Control Center**(`Form.html` 기준 WebView2 기반 프론트엔드 및 제어 인터페이스)의 현재까지의 개발 진척도, 주요 구현 기능, 향후 모델 확장 방향, 그리고 현재 기술적 한계를 정리한 문서입니다.
 
 ---
 
