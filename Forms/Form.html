@@ -1,0 +1,1424 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <style>
+        :root {
+            --bg-canvas: #f6f7fb;
+            --text-main: #1e2433;
+            --card-bg: rgba(255, 255, 255, 0.9);
+            --card-bg-hover: rgba(255, 255, 255, 0.98);
+            --card-border: #e5e9f2;
+            --card-border-hover: #c7d2fe;
+            --card-shadow: 0 4px 16px rgba(148, 163, 184, 0.12);
+            --card-shadow-hover: 0 8px 22px rgba(124, 58, 237, 0.1);
+            --spotlight: rgba(167, 139, 250, 0.16);
+            --btn-bg: rgba(246, 247, 251, 0.88);
+            --btn-bg-hover: rgba(238, 242, 255, 0.98);
+            --btn-border: #e4e8f1;
+            --btn-text: #4b5563;
+            --btn-active-bg: #ede9fe;
+            --btn-active-border: #c4b5fd;
+            --btn-active-text: #5b21b6;
+            --popover-bg: rgba(252, 253, 255, 0.96);
+            --popover-border: #dfe4ef;
+            --thumb-color: #8b5cf6;
+            --thumb-ring: rgba(196, 181, 253, 0.5);
+            --rgb-bar: linear-gradient(90deg, #93c5fd 0%, #99f6e4 50%, #d8b4fe 100%);
+        }
+
+        html[data-theme="dark"] {
+            --bg-canvas: #12141c;
+            --text-main: #e5e7eb;
+            --card-bg: #191c27;
+            --card-bg-hover: #1f2331;
+            --card-border: #282d3f;
+            --card-border-hover: #474269;
+            --card-shadow: none;
+            --card-shadow-hover: none;
+            --spotlight: rgba(167, 139, 250, 0.08);
+            --btn-bg: #151822;
+            --btn-bg-hover: #222636;
+            --btn-border: #2a2f42;
+            --btn-text: #cbd5e1;
+            --btn-active-bg: #292440;
+            --btn-active-border: #5b4b8a;
+            --btn-active-text: #ddd6fe;
+            --popover-bg: #181b26;
+            --popover-border: #2c3145;
+            --thumb-color: #9f85e8;
+            --thumb-ring: rgba(159, 133, 232, 0.22);
+            --rgb-bar: linear-gradient(90deg, #5b8fb9 0%, #569e8a 50%, #8c6bb1 100%);
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: var(--bg-canvas);
+            color: var(--text-main);
+            user-select: none;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        .drag-region { -webkit-app-region: drag; }
+        .no-drag { -webkit-app-region: no-drag; }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 12px;
+            width: 12px;
+            border-radius: 50%;
+            background: var(--thumb-color);
+            cursor: pointer;
+            box-shadow: 0 0 0 3px var(--thumb-ring);
+            transition: transform 0.18s ease, box-shadow 0.18s ease;
+        }
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.15);
+        }
+
+        @keyframes blobA { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(5%,6%) scale(1.1); } }
+        @keyframes blobB { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-6%,-5%) scale(1.12); } }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        @keyframes popIn { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
+        @keyframes fanspin { to { transform: rotate(360deg); } }
+        @keyframes shimmer { from { background-position: -200% 0; } to { background-position: 200% 0; } }
+        @keyframes statusBlink { 0%,100% { opacity: .45; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.22); } }
+        @keyframes alertRing { 0%,100% { box-shadow: inset 0 0 0 1px transparent; } 50% { box-shadow: inset 0 0 0 1px var(--alert); } }
+        @keyframes chargePulse { 0%,100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); } 50% { box-shadow: 0 0 0 3px rgba(52,211,153,.2); } }
+        @keyframes titleShine { 0%,100% { background-position: 0% 0; } 50% { background-position: 100% 0; } }
+        @keyframes dashFlow { to { stroke-dashoffset: -12; } }
+
+        .blob-a { animation: blobA 18s ease-in-out infinite; }
+        .blob-b { animation: blobB 22s ease-in-out infinite; }
+        .enter { opacity: 0; animation: fadeUp .5s cubic-bezier(.2,.8,.2,1) forwards; }
+        .pop-in { animation: popIn .2s cubic-bezier(.2,.9,.3,1.15) both; }
+        .fan-spin { animation: fanspin 1s linear infinite; }
+        .bar-shimmer {
+            background-image: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.45) 50%, rgba(255,255,255,0) 100%);
+            background-size: 200% 100%;
+            animation: shimmer 2.4s linear infinite;
+        }
+        html[data-theme="dark"] .bar-shimmer {
+            background-image: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.12) 50%, rgba(255,255,255,0) 100%);
+        }
+        .charge-pulse { animation: chargePulse 2.2s ease-in-out infinite; }
+        .title-shine { background-size: 200% 100%; animation: titleShine 9s ease-in-out infinite; }
+        .rgb-bar { background: var(--rgb-bar); transition: background 0.3s ease; }
+
+        .interactive-card {
+            --mx: 50%;
+            --my: 50%;
+            background-color: var(--card-bg);
+            border-color: var(--card-border);
+            box-shadow: var(--card-shadow);
+            opacity: 0.96;
+            transition: background-color 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease, opacity 0.22s ease, transform 0.22s cubic-bezier(.2,.8,.2,1);
+        }
+        html:not([data-theme="dark"]) .interactive-card {
+            backdrop-filter: blur(20px);
+        }
+        .interactive-card:hover {
+            background-color: var(--card-bg-hover);
+            border-color: var(--card-border-hover);
+            box-shadow: var(--card-shadow-hover);
+            opacity: 1;
+            transform: translateY(-1px);
+        }
+        .card-spotlight {
+            background: radial-gradient(220px circle at var(--mx) var(--my), var(--spotlight), transparent 72%);
+            opacity: 0;
+            transition: opacity 0.22s ease;
+            pointer-events: none;
+        }
+        .interactive-card:hover .card-spotlight {
+            opacity: 1;
+        }
+
+        .interactive-btn {
+            background-color: var(--btn-bg);
+            border-color: var(--btn-border);
+            color: var(--btn-text);
+            opacity: 0.93;
+            transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, opacity 0.18s ease, transform 0.16s cubic-bezier(.2,.9,.3,1.15);
+        }
+        .interactive-btn:hover:not(:disabled) {
+            background-color: var(--btn-bg-hover);
+            border-color: var(--card-border-hover);
+            opacity: 1;
+            transform: translateY(-1px) scale(1.01);
+        }
+        .interactive-btn:active:not(:disabled) {
+            transform: scale(0.97);
+            opacity: 0.88;
+        }
+        .interactive-btn.is-active:not(:disabled) {
+            background-color: var(--btn-active-bg);
+            border-color: var(--btn-active-border);
+            color: var(--btn-active-text);
+            opacity: 1;
+        }
+
+        .top-icon-btn {
+            background-color: var(--btn-bg);
+            border-color: var(--btn-border);
+            color: var(--btn-text);
+            opacity: 0.9;
+            transition: all 0.2s cubic-bezier(.2,.9,.3,1.15);
+        }
+        .top-icon-btn:hover {
+            background-color: var(--btn-active-bg);
+            border-color: var(--btn-active-border);
+            color: var(--btn-active-text);
+            opacity: 1;
+            transform: translateY(-1px) scale(1.08);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+        }
+    </style>
+</head>
+<body>
+    <div id="boot-error" style="display:none;position:fixed;inset:0;z-index:99999;background:#fff1f2;color:#be123c;font:12px Consolas,monospace;padding:16px;white-space:pre-wrap;overflow:auto;-webkit-app-region:no-drag;user-select:text"></div>
+    <script>
+    (function () {
+      function show(t) {
+        var b = document.getElementById('boot-error');
+        if (!b) return;
+        b.style.display = 'block';
+        b.textContent += t + '\n\n';
+      }
+      window.__showBootError = show;
+      window.addEventListener('error', function (e) {
+        var msg = e.message;
+        if (!msg) {
+          if (e.target) {
+            msg = e.target.src ? e.target.src : e.target.href;
+          }
+        }
+        if (!msg) msg = '알 수 없음';
+        var loc = e.filename ? (' @' + e.filename + ':' + e.lineno + ':' + e.colno) : '';
+        show('[error] ' + msg + loc);
+      }, true);
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e.reason;
+        var detail = r ? (r.stack ? r.stack : r) : '';
+        show('[promise] ' + detail);
+      });
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          if (typeof React === 'undefined') show('React 로드 실패 (네트워크/CDN 확인)');
+          if (typeof ReactDOM === 'undefined') show('ReactDOM 로드 실패 (네트워크/CDN 확인)');
+          if (typeof tailwind === 'undefined') show('Tailwind 로드 실패 (네트워크/CDN 확인)');
+          var r = document.getElementById('root');
+          if (r) {
+            if (!r.hasChildNodes()) show('앱이 렌더링되지 않았습니다 (위 오류 확인)');
+          }
+        }, 4000);
+      });
+    })();
+    </script>
+
+    <div id="root"></div>
+    <script>
+    (function () {
+      'use strict';
+      var e = React.createElement;
+
+      function svgIcon(className, children, vb) {
+        return e('svg', {
+          xmlns: 'http://www.w3.org/2000/svg',
+          width: '20',
+          height: '20',
+          viewBox: vb ? vb : '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: '1.5',
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          className: className
+        }, children);
+      }
+
+      var IconCpu = function (p) {
+        return svgIcon(p.className, [
+          e('rect', { key: 1, x: 4, y: 4, width: 16, height: 16, rx: 2, ry: 2 }),
+          e('rect', { key: 2, x: 9, y: 9, width: 6, height: 6 }),
+          e('line', { key: 3, x1: 9, y1: 1, x2: 9, y2: 4 }),
+          e('line', { key: 4, x1: 15, y1: 1, x2: 15, y2: 4 }),
+          e('line', { key: 5, x1: 9, y1: 20, x2: 9, y2: 23 }),
+          e('line', { key: 6, x1: 15, y1: 20, x2: 15, y2: 23 }),
+          e('line', { key: 7, x1: 20, y1: 9, x2: 23, y2: 9 }),
+          e('line', { key: 8, x1: 20, y1: 14, x2: 23, y2: 14 }),
+          e('line', { key: 9, x1: 1, y1: 9, x2: 4, y2: 9 }),
+          e('line', { key: 10, x1: 1, y1: 14, x2: 4, y2: 14 })
+        ]);
+      };
+
+      var IconGpu = function (p) {
+        return svgIcon(p.className, [
+          e('rect', { key: 1, x: 2, y: 6, width: 20, height: 12, rx: 2, ry: 2 }),
+          e('path', { key: 2, d: 'M6 18v3' }),
+          e('path', { key: 3, d: 'M10 18v3' }),
+          e('path', { key: 4, d: 'M14 18v3' }),
+          e('path', { key: 5, d: 'M18 18v3' }),
+          e('path', { key: 6, d: 'M8 12h.01' }),
+          e('path', { key: 7, d: 'M12 12h.01' }),
+          e('path', { key: 8, d: 'M16 12h.01' })
+        ]);
+      };
+
+      var IconFan = function (p) {
+        return svgIcon(p.className, [
+          e('path', { key: 1, d: 'M12 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' }),
+          e('path', { key: 2, d: 'M12 8a2 2 0 0 0-2-2c0-2.2 1.8-4 4-4a4 4 0 0 1 4 4c0 2.2-1.8 4-4 4Z' }),
+          e('path', { key: 3, d: 'M16 12a2 2 0 0 0 2 2c2.2 0 4-1.8 4-4a4 4 0 0 0-4-4c-2.2 0-4 1.8-4 4Z' }),
+          e('path', { key: 4, d: 'M12 16a2 2 0 0 0 2 2c0 2.2-1.8 4-4 4a4 4 0 0 1-4-4c0-2.2 1.8-4 4-4Z' }),
+          e('path', { key: 5, d: 'M8 12a2 2 0 0 0-2-2c-2.2 0-4 1.8-4 4a4 4 0 0 0 4 4c2.2 0 4-1.8 4-4Z' })
+        ]);
+      };
+
+      var IconBattery = function (p) {
+        var lvl = Math.max(0, Math.min(100, Number(p.level) ? Number(p.level) : 0));
+        var w = (12 * lvl) / 100;
+        return svgIcon(p.className, [
+          e('rect', { key: 1, width: 16, height: 10, x: 2, y: 7, rx: 2, ry: 2 }),
+          e('line', { key: 2, x1: 22, x2: 22, y1: 11, y2: 13 }),
+          e('rect', { key: 3, x: 4, y: 9, width: w, height: 6, fill: 'currentColor', rx: 1 })
+        ]);
+      };
+
+      var IconLock = function (p) {
+        return svgIcon(p.className, [
+          e('rect', { key: 1, width: 18, height: 11, x: 3, y: 11, rx: 2, ry: 2 }),
+          e('path', { key: 2, d: p.isLocked ? 'M7 11V7a5 5 0 0 1 10 0v4' : 'M7 11V7a5 5 0 0 1 9.9-1' })
+        ]);
+      };
+
+      var IconClose = function (p) {
+        return svgIcon(p.className, [
+          e('line', { key: 1, x1: 18, y1: 6, x2: 6, y2: 18 }),
+          e('line', { key: 2, x1: 6, y1: 6, x2: 18, y2: 18 })
+        ]);
+      };
+
+      var IconMonitor = function (p) {
+        return svgIcon(p.className, [
+          e('rect', { key: 1, x: 2, y: 3, width: 20, height: 14, rx: 2, ry: 2 }),
+          e('line', { key: 2, x1: 8, y1: 21, x2: 16, y2: 21 }),
+          e('line', { key: 3, x1: 12, y1: 17, x2: 12, y2: 21 }),
+          e('polyline', { key: 4, points: '6 12 9 8 12 14 15 9 18 12' })
+        ]);
+      };
+
+      var IconMusic = function (p) {
+        return svgIcon(p.className, [
+          e('path', { key: 1, d: 'M9 18V5l12-2v13' }),
+          e('circle', { key: 2, cx: 6, cy: 18, r: 3 }),
+          e('circle', { key: 3, cx: 18, cy: 16, r: 3 })
+        ]);
+      };
+
+      var IconCurve = function (p) {
+        return svgIcon(p.className, [
+          e('path', { key: 1, d: 'M3 20h18' }),
+          e('path', { key: 2, d: 'M3 20V4' }),
+          e('path', { key: 3, d: 'M6 17c3 0 4-6 7-6s4-5 7-5' })
+        ]);
+      };
+
+      var IconSun = function (p) {
+        return svgIcon(p.className, [
+          e('circle', { key: 1, cx: 12, cy: 12, r: 4 }),
+          e('path', { key: 2, d: 'M12 2v2' }),
+          e('path', { key: 3, d: 'M12 20v2' }),
+          e('path', { key: 4, d: 'm4.93 4.93 1.41 1.41' }),
+          e('path', { key: 5, d: 'm17.66 17.66 1.41 1.41' }),
+          e('path', { key: 6, d: 'M2 12h2' }),
+          e('path', { key: 7, d: 'M20 12h2' }),
+          e('path', { key: 8, d: 'm6.34 17.66-1.41 1.41' }),
+          e('path', { key: 9, d: 'm19.07 4.93-1.41 1.41' })
+        ]);
+      };
+
+      var IconMoon = function (p) {
+        return svgIcon(p.className, [
+          e('path', { key: 1, d: 'M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z' })
+        ]);
+      };
+
+      function ErrorBoundary(props) {
+        React.Component.call(this, props);
+        this.state = { err: null };
+      }
+      ErrorBoundary.prototype = Object.create(React.Component.prototype);
+      ErrorBoundary.prototype.constructor = ErrorBoundary;
+      ErrorBoundary.getDerivedStateFromError = function (err) { return { err: err }; };
+      ErrorBoundary.prototype.render = function () {
+        if (this.state.err) {
+          return e('div', {
+            style: { padding: 16, color: '#be123c', font: '12px Consolas, monospace', whiteSpace: 'pre-wrap', userSelect: 'text', WebkitAppRegion: 'no-drag' }
+          }, '렌더링 오류: ' + (this.state.err.stack ? this.state.err.stack : (this.state.err.message ? this.state.err.message : String(this.state.err))));
+        }
+        return this.props.children;
+      };
+
+      function useSmooth(target, duration) {
+        var dur = duration ? duration : 600;
+        var initial = (target != null) ? target : 0;
+        var state = React.useState(initial);
+        var v = state[0], setV = state[1];
+        var fromRef = React.useRef(initial);
+        React.useEffect(function () {
+          if (target == null) return;
+          var from = fromRef.current;
+          var start = performance.now();
+          var raf;
+          function tick(now) {
+            var p = Math.min(1, (now - start) / dur);
+            var eased = 1 - Math.pow(1 - p, 3);
+            var cur = from + (target - from) * eased;
+            fromRef.current = cur;
+            setV(cur);
+            if (p < 1) raf = requestAnimationFrame(tick);
+          }
+          raf = requestAnimationFrame(tick);
+          return function () { cancelAnimationFrame(raf); };
+        }, [target]);
+        return v;
+      }
+
+      function tempTone(t, isDark) {
+        if (t >= 88) return isDark ? 'text-rose-400' : 'text-rose-600';
+        if (t >= 78) return isDark ? 'text-amber-300' : 'text-amber-700';
+        if (t >= 65) return isDark ? 'text-amber-200' : 'text-amber-600';
+        return isDark ? 'text-slate-200' : 'text-[#1e2433]';
+      }
+
+      function tempGlow(t, isDark) {
+        if (isDark) return 'none';
+        if (t >= 93) return '0 0 12px rgba(244,63,94,.28)';
+        if (t >= 88) return '0 0 10px rgba(245,158,11,.22)';
+        return 'none';
+      }
+
+      var STATUS_LEVELS = [
+        { name: '정상', color: '#34d399', dur: 1.8 },
+        { name: '주의', color: '#fbbf24', dur: 1.0 },
+        { name: '경고', color: '#fb923c', dur: 0.55 },
+        { name: '위험', color: '#fb7185', dur: 0.28 }
+      ];
+      var TH_CPU_TEMP = [78, 88, 95];
+      var TH_GPU_TEMP = [72, 80, 85];
+      var TH_CPU_VOLT = [1.32, 1.40, 1.48];
+      function levelOf(v, th) {
+        if (v == null) return 0;
+        if (!Number.isFinite(v)) return 0;
+        if (v >= th[2]) return 3;
+        if (v >= th[1]) return 2;
+        if (v >= th[0]) return 1;
+        return 0;
+      }
+
+      function GlassCard(p) {
+        var cardRef = React.useRef(null);
+        function handleMouseMove(ev) {
+          var el = cardRef.current;
+          if (!el) return;
+          var r = el.getBoundingClientRect();
+          el.style.setProperty('--mx', (ev.clientX - r.left) + 'px');
+          el.style.setProperty('--my', (ev.clientY - r.top) + 'px');
+        }
+        var ringCls = p.highlight ? (p.isDark ? 'ring-1 ring-violet-500/35' : 'ring-1 ring-violet-300') : '';
+        return e('div', {
+          ref: cardRef,
+          onMouseMove: handleMouseMove,
+          style: { animationDelay: (p.delay ? p.delay : 0) + 'ms' },
+          className: 'enter interactive-card relative overflow-hidden border rounded-2xl ' + ringCls + ' ' + (p.className ? p.className : '')
+        }, [
+          e('div', { key: 'spot', className: 'card-spotlight absolute inset-0 z-0' }),
+          !p.isDark ? e('div', { key: 'grad', className: 'absolute inset-0 bg-gradient-to-br from-white/55 via-transparent to-violet-200/15 pointer-events-none z-0' }) : null,
+          ((p.tone ? p.tone : 0) >= 2) ? e('div', {
+            key: 'ring',
+            className: 'absolute inset-0 rounded-2xl pointer-events-none z-0',
+            style: { '--alert': STATUS_LEVELS[p.tone].color, animation: 'alertRing ' + (STATUS_LEVELS[p.tone].dur * 3).toFixed(2) + 's ease-in-out infinite' }
+          }) : null,
+          e('div', { key: 'body', className: 'relative z-10 w-full h-full flex flex-col justify-center min-h-0' }, p.children)
+        ]);
+      }
+
+      function GlassButton(p) {
+        var isAct = p.active ? !p.disabled : false;
+        var activeCls = isAct ? 'is-active' : '';
+        var layoutCls = p.isRow ? 'items-center justify-center' : 'flex-col items-center justify-center gap-0.5';
+        var disabledCls = p.disabled ? 'opacity-45 cursor-not-allowed' : 'cursor-pointer';
+        var spanCls = p.isRow ? 'flex-row items-center justify-between px-1' : 'flex-col items-center justify-center gap-0.5 text-center';
+        return e('button', {
+          type: 'button',
+          onClick: p.disabled ? undefined : p.onClick,
+          disabled: !!p.disabled,
+          className: 'no-drag interactive-btn ' + activeCls + ' relative overflow-hidden group px-2 py-1.5 rounded-xl font-medium text-[11px] tracking-wide border flex ' + layoutCls + ' ' + disabledCls + ' ' + (p.className ? p.className : '')
+        }, e('span', { className: 'relative z-10 w-full pointer-events-none flex ' + spanCls }, p.children));
+      }
+
+      function ProgressBar(p) {
+        var max = p.max ? p.max : 100;
+        var percentage = p.inactive ? 0 : Math.min(100, Math.max(0, (p.value / max) * 100));
+        var lblCls = p.inactive ? (p.isDark ? 'text-slate-600' : 'text-[#94a3b8]') : (p.isDark ? 'text-slate-300 group-hover/bar:text-white' : 'text-[#525d73] group-hover/bar:text-[#1e2433]');
+        var subCls = p.inactive ? (p.isDark ? 'text-slate-600' : 'text-[#94a3b8]') : (p.isDark ? 'text-slate-400 group-hover/bar:text-slate-200' : 'text-[#647087] group-hover/bar:text-[#1e2433]');
+        var hasW = p.subLabel ? (p.subLabel.indexOf('W') >= 0) : false;
+        var subTxt = p.inactive ? (hasW ? '0 W' : '0%') : (p.subLabel ? p.subLabel : String(Math.round(p.value)));
+        var trackCls = p.isDark ? 'bg-[#12141d] border-[#292e42]' : 'bg-[#eef1f7] border-[#e3e8f2]';
+        var showShim = p.inactive ? false : (percentage > 2);
+        return e('div', { className: 'w-full flex flex-col gap-[3px] group/bar' }, [
+          e('div', { key: 1, className: 'flex justify-between items-end px-0.5' }, [
+            e('span', { key: 'l', className: 'text-[9px] leading-none font-bold tracking-widest transition-colors ' + lblCls }, p.label),
+            e('span', { key: 's', className: 'text-[9px] leading-none font-mono transition-colors ' + subCls }, subTxt)
+          ]),
+          e('div', { key: 2, className: 'h-1.5 w-full rounded-full overflow-hidden border transition-all duration-200 group-hover/bar:h-2 ' + trackCls },
+            e('div', {
+              className: 'relative overflow-hidden h-full rounded-full transition-all duration-500 ease-out ' + (p.inactive ? 'bg-transparent' : (p.colorClass ? p.colorClass : 'bg-sky-400')),
+              style: { width: percentage + '%' }
+            }, showShim ? e('div', { className: 'absolute inset-0 bar-shimmer' }) : null)
+          )
+        ]);
+      }
+
+      function FanHalfCard(p) {
+        var rpmSmooth = useSmooth(p.rpm);
+        var pctNum = (p.percent != null) ? p.percent : 0;
+        var spinSeconds = Math.min(2.2, Math.max(0.4, 2.2 - pctNum * 0.02));
+        var iconBg = p.spinning ? (p.isDark ? 'bg-[#25293b] ' + p.colorClass : 'bg-violet-100/90 ' + p.colorClass) : (p.isDark ? 'bg-[#151822] text-slate-600' : 'bg-[#f1f4f9] text-[#94a3b8]');
+        var syncCls = p.isDark ? 'text-emerald-300 bg-[#1b2e2a] border border-emerald-700/50' : 'text-emerald-700 bg-emerald-100 border border-emerald-300/80';
+        return e(GlassCard, { isDark: p.isDark, className: 'flex-1 px-2.5 py-2 flex items-center gap-2', delay: p.delay },
+          e('div', { className: 'flex items-center gap-2' }, [
+            e('div', { key: 1, className: 'p-1.5 rounded-full transition-all duration-300 ' + iconBg },
+              e('span', { className: 'inline-flex ' + (p.spinning ? 'fan-spin' : ''), style: p.spinning ? { animationDuration: spinSeconds + 's' } : undefined },
+                e(IconFan, { className: 'w-3.5 h-3.5' })
+              )
+            ),
+            e('div', { key: 2, className: 'flex flex-col justify-center min-w-0' }, [
+              e('div', { key: 't', className: 'flex items-center gap-1 mb-0.5' }, [
+                e('span', { key: 'l', className: 'text-[8px] font-bold tracking-widest leading-none ' + (p.isDark ? 'text-slate-400' : 'text-[#647087]') }, p.label),
+                p.synced ? e('span', { key: 's', className: 'text-[7px] font-bold rounded px-1 leading-tight tracking-wider ' + syncCls }, 'SYNC') : null
+              ]),
+              e('div', { key: 'v', className: 'flex items-baseline gap-1' }, [
+                e('span', { key: 'r', className: 'text-base font-semibold tracking-tight leading-none tabular-nums ' + (p.isDark ? 'text-slate-100' : 'text-[#1e2433]') }, p.rpm == null ? '--' : Math.round(rpmSmooth)),
+                e('span', { key: 'p', className: 'text-[9px] font-mono ' + (p.isDark ? 'text-slate-400' : 'text-[#647087]') }, 'RPM (' + (p.percent != null ? p.percent : '--') + '%)')
+              ])
+            ])
+          ])
+        );
+      }
+
+      function Popover(p) {
+        var alignClass = (p.align === 'left') ? 'left-0' : ((p.align === 'right') ? 'right-0' : 'left-1/2 -translate-x-1/2');
+        var arrowAlign = (p.align === 'left') ? 'left-4' : ((p.align === 'right') ? 'right-4' : 'left-1/2 -translate-x-1/2');
+        var glassCls = p.isDark ? '' : 'backdrop-blur-[28px] shadow-[0_12px_36px_rgba(100,116,139,0.18)]';
+        return e('div', {
+          className: 'absolute bottom-full mb-2 ' + alignClass + ' z-50 no-drag',
+          style: { width: p.width ? p.width : 290 },
+          onMouseDown: function (ev) { ev.stopPropagation(); },
+          onClick: function (ev) { ev.stopPropagation(); }
+        }, [
+          e('div', {
+            key: 'box',
+            style: {
+              transformOrigin: 'bottom center',
+              backgroundColor: 'var(--popover-bg)',
+              borderColor: 'var(--popover-border)',
+              color: 'var(--text-main)'
+            },
+            className: 'pop-in relative overflow-hidden ' + glassCls + ' border rounded-2xl hover:opacity-100 opacity-96 transition-opacity duration-200 p-2.5 flex flex-col gap-1.5'
+          }, p.children),
+          e('div', {
+            key: 'arrow',
+            style: { backgroundColor: 'var(--popover-bg)', borderColor: 'var(--popover-border)' },
+            className: 'absolute -bottom-1.5 w-3 h-3 border-r border-b rotate-45 ' + arrowAlign
+          })
+        ]);
+      }
+
+      function ToggleSwitch(p) {
+        var bgCls = p.checked
+          ? (p.isDark ? 'bg-[#54477d] border-[#7867ad]' : 'bg-violet-300/85 border-violet-400/60')
+          : (p.isDark ? 'bg-[#262b3d] border-[#373e57]' : 'bg-[#e2e8f0] border-[#cbd5e1]');
+        return e('button', {
+          type: 'button',
+          onClick: function () { p.onChange(!p.checked); },
+          className: 'no-drag w-9 h-5 rounded-full relative transition-all duration-300 cursor-pointer shrink-0 border hover:scale-105 ' + bgCls
+        }, e('span', {
+          className: 'absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform duration-300 ' + (p.checked ? 'translate-x-4' : '')
+        }));
+      }
+
+      var FAN_MODES = [
+        { key: 'auto',   label: 'AUTO',  lightText: 'text-[#3730a3]',   darkText: 'text-violet-200',   lightThumb: 'bg-white border-[#c7d2fe] shadow-xs', darkThumb: 'bg-[#2b2642] border-[#594b87]' },
+        { key: 'quiet',  label: 'QUIET', lightText: 'text-emerald-700', darkText: 'text-emerald-300',  lightThumb: 'bg-emerald-100 border-emerald-300',  darkThumb: 'bg-[#1c2e29] border-[#3d6b5d]' },
+        { key: 'custom', label: 'COOL',  lightText: 'text-sky-700',     darkText: 'text-sky-300',      lightThumb: 'bg-sky-100 border-sky-300',          darkThumb: 'bg-[#1b2938] border-[#3e6385]' }
+      ];
+
+      function FanModeSwitch(p) {
+        var found = FAN_MODES.findIndex(function (m) { return m.key === p.mode; });
+        var idx = (found < 0) ? 0 : found;
+        var cur = FAN_MODES[idx];
+        var wrapCls = p.isDark ? 'bg-[#131620] border-[#282d3f]' : 'bg-[#f1f4f9] border-[#e4e8f1]';
+        return e('div', { className: 'relative grid grid-cols-3 h-full no-drag rounded-xl p-0.5 border transition-colors ' + wrapCls }, [
+          e('div', {
+            key: 'thumb',
+            className: 'absolute inset-y-0.5 left-0.5 rounded-[10px] border ' + (p.isDark ? cur.darkThumb : cur.lightThumb),
+            style: {
+              width: 'calc((100% - 4px) / 3)',
+              transform: 'translateX(' + (idx * 100) + '%)',
+              transition: 'transform .3s cubic-bezier(.3,1.2,.4,1), background-color .3s, border-color .3s'
+            }
+          })
+        ].concat(FAN_MODES.map(function (m) {
+          var txtCls = (m.key === cur.key)
+            ? (p.isDark ? m.darkText : m.lightText)
+            : (p.isDark ? 'text-slate-400 hover:text-slate-200' : 'text-[#647087] hover:text-[#1e2433]');
+          return e('button', {
+            key: m.key,
+            type: 'button',
+            onClick: function () { p.onSelect(m.key); },
+            className: 'no-drag relative z-10 text-[11px] font-bold tracking-widest whitespace-nowrap transition-all duration-200 cursor-pointer active:scale-[0.96] hover:opacity-100 ' + txtCls
+          }, m.label);
+        })));
+      }
+
+      function CurveButtons(p) {
+        var btn = 'no-drag interactive-btn flex-1 min-h-0 px-2 rounded-lg border whitespace-nowrap text-[10px] font-semibold tracking-wide leading-none cursor-pointer';
+        return e('div', { className: 'no-drag flex items-center gap-1.5 h-full pl-1' }, [
+          e('div', { key: 'ic', className: 'flex items-center justify-center w-6 shrink-0 transition-transform duration-200 hover:scale-110 ' + (p.isDark ? 'text-slate-400' : 'text-[#647087]') },
+            e(IconCurve, { className: 'w-[18px] h-[18px]' })
+          ),
+          e('div', { key: 'btns', className: 'flex flex-col gap-[3px] flex-1 min-w-0 h-full' }, [
+            e('button', { key: 'q', type: 'button', onClick: p.onQuiet, title: 'QUIET 모드 팬 커브 설정', className: btn }, 'QUIET 커브'),
+            e('button', { key: 'c', type: 'button', onClick: p.onCool, title: 'COOL 모드 팬 커브 설정', className: btn }, 'COOL 커브')
+          ])
+        ]);
+      }
+
+      function StatusDot(p) {
+        var lc = levelOf(p.cpuTemp, TH_CPU_TEMP);
+        var lg = p.gpuActive ? levelOf(p.gpuTemp, TH_GPU_TEMP) : 0;
+        var lv = levelOf(p.voltage, TH_CPU_VOLT);
+        var worst = Math.max(lc, lg, lv);
+        var s = STATUS_LEVELS[worst];
+        var gpuPart = p.gpuActive ? (Math.round(p.gpuTemp) + '°C ' + STATUS_LEVELS[lg].name) : 'OFF';
+        var voltPart = (p.voltage != null) ? (p.voltage.toFixed(3) + 'V ' + STATUS_LEVELS[lv].name) : '--';
+        var tip = 'CPU ' + Math.round(p.cpuTemp ? p.cpuTemp : 0) + '°C ' + STATUS_LEVELS[lc].name + ' · GPU ' + gpuPart + ' · 전압 ' + voltPart;
+        return e('span', {
+          className: 'w-2 h-2 rounded-full self-center shrink-0 transition-transform duration-200 hover:scale-125',
+          title: tip,
+          style: {
+            backgroundColor: s.color,
+            animation: 'statusBlink ' + s.dur + 's ease-in-out infinite',
+            transition: 'background-color .4s'
+          }
+        });
+      }
+
+      var CAP_TABLE = [
+        [1500, 55.0],
+        [1700, 70.0],
+        [1900, 88.0],
+        [2100, 110.0],
+        [2300, 135.0],
+        [2500, 155.0],
+        [2700, 175.0]
+      ];
+      function estWatts(mhz) {
+        if (mhz <= CAP_TABLE[0][0]) return CAP_TABLE[0][1];
+        if (mhz >= CAP_TABLE[CAP_TABLE.length - 1][0]) return CAP_TABLE[CAP_TABLE.length - 1][1];
+        for (var i = 0; i < CAP_TABLE.length - 1; i++) {
+          var x0 = CAP_TABLE[i][0], y0 = CAP_TABLE[i][1];
+          var x1 = CAP_TABLE[i + 1][0], y1 = CAP_TABLE[i + 1][1];
+          if (mhz >= x0) {
+            if (mhz <= x1) return y0 + (y1 - y0) * ((mhz - x0) / (x1 - x0));
+          }
+        }
+        return 175;
+      }
+
+      function App() {
+        var darkState = React.useState(false);
+        var isDark = darkState[0], setIsDark = darkState[1];
+
+        var statsState = React.useState({
+          cpu: { usage: 0, fps: null, temp: 0, clock: 0, power: 0, voltage: null },
+          gpu: { active: false, usage: 0, temp: 0, clock: 0, power: 0 },
+          fan: { cpuPercent: null, gpuPercent: null, cpuRpm: null, gpuRpm: null, cpuEstimated: false, gpuEstimated: false, error: '' },
+          battery: { percent: 80, watts: 0, charging: false },
+          ui: {
+            powerProfile: 'balanced', fanMode: 'auto', refreshRate: 240, isLocked: true,
+            gpuModeStatus: 'GPU 대기 중', gpuRequestedWatts: 175, gpuDynamicBoost: true, gpuCtgp: true, gpuDState: 1,
+            gpuClockCap: 0, gpuClockCapApplied: 0, isGpuEnabled: true, isGpuPresent: true,
+            cpuPl1Watts: 85, cpuPl2Watts: 125, cpuTauSeconds: 32,
+            cpuEffectivePl1Watts: 85, cpuEffectivePl2Watts: 125,
+            tpp250AutoBalance: true, tppCpuWatts: 80, tpp250Active: false,
+            cpuTuningStatus: 'Intel 275HX 게이밍 전력 제어 준비됨'
+          }
+        });
+        var stats = statsState[0], setStats = statsState[1];
+
+        var cpuModalState = React.useState({ open: false, pl1: 85, pl2: 125, tau: 32, tpp250: true, tppCpu: 80 });
+        var cpuPowerModal = cpuModalState[0], setCpuPowerModal = cpuModalState[1];
+
+        var gpuModalState = React.useState({ open: false, cap: 0 });
+        var gpuModal = gpuModalState[0], setGpuModal = gpuModalState[1];
+
+        function sendCmd(cmd, payload) {
+          if (window.chrome) {
+            if (window.chrome.webview) {
+              window.chrome.webview.postMessage({ cmd: cmd, payload: (payload != null) ? payload : null });
+            }
+          }
+        }
+
+        React.useEffect(function () {
+          document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+          sendCmd('SET_THEME', { isDark: isDark });
+        }, [isDark]);
+
+        React.useEffect(function () {
+          function onCloseCpu() {
+            setCpuPowerModal(function (m) { return m.open ? Object.assign({}, m, { open: false }) : m; });
+          }
+          window.addEventListener('omen-close-cpu-modal', onCloseCpu);
+          return function () { window.removeEventListener('omen-close-cpu-modal', onCloseCpu); };
+        }, []);
+
+        React.useEffect(function () {
+          if (window.chrome) {
+            if (window.chrome.webview) {
+              window.chrome.webview.addEventListener('message', function (ev) {
+                var d = ev.data;
+                if (!d) return;
+                if (d.cmd === 'OPEN_CPU_POWER_MODAL' || d.cmd === 'OPEN_UV_MODAL') {
+                  setCpuPowerModal({
+                    open: true,
+                    pl1: (d.pl1 != null) ? d.pl1 : 85,
+                    pl2: (d.pl2 != null) ? d.pl2 : 125,
+                    tau: (d.tau != null) ? d.tau : 32,
+                    tpp250: (d.tpp250AutoBalance != null) ? d.tpp250AutoBalance : true,
+                    tppCpu: (d.tppCpuWatts != null) ? d.tppCpuWatts : 80
+                  });
+                } else if (d.cpu) {
+                  if (d.ui) {
+                    setStats(d);
+                    setCpuPowerModal(function (m) {
+                      if (m.open) return m;
+                      return {
+                        open: false,
+                        pl1: (d.ui.cpuPl1Watts != null) ? d.ui.cpuPl1Watts : m.pl1,
+                        pl2: (d.ui.cpuPl2Watts != null) ? d.ui.cpuPl2Watts : m.pl2,
+                        tau: (d.ui.cpuTauSeconds != null) ? d.ui.cpuTauSeconds : m.tau,
+                        tpp250: (d.ui.tpp250AutoBalance != null) ? d.ui.tpp250AutoBalance : m.tpp250,
+                        tppCpu: (d.ui.tppCpuWatts != null) ? d.ui.tppCpuWatts : m.tppCpu
+                      };
+                    });
+                  }
+                }
+              });
+            }
+          }
+        }, []);
+
+        var ui = stats.ui;
+        var gpuMissing = !ui.isGpuPresent;
+        var fullGpuMaxW = (ui.gpuCtgp ? (ui.gpuDynamicBoost ? 175 : 140) : (ui.gpuDynamicBoost ? 155 : 140));
+        var gpuPowerMax = (ui.gpuClockCapApplied > 0) ? Math.max(40, Math.round(estWatts(ui.gpuClockCapApplied))) : fullGpuMaxW;
+        var cpuPowerMax = ui.cpuEffectivePl2Watts ? ui.cpuEffectivePl2Watts : (ui.cpuPl2Watts ? ui.cpuPl2Watts : 125);
+        var fanSynced = (ui.fanMode === 'quiet') || (ui.fanMode === 'custom');
+
+        var cpuTempSmooth = useSmooth(stats.cpu.temp);
+        var gpuTempSmooth = useSmooth(stats.gpu.active ? stats.gpu.temp : null);
+
+        var cpuTone = Math.max(levelOf(stats.cpu.temp, TH_CPU_TEMP), levelOf(stats.cpu.voltage, TH_CPU_VOLT));
+        var gpuTone = stats.gpu.active ? levelOf(stats.gpu.temp, TH_GPU_TEMP) : 0;
+
+        var subText = isDark ? 'text-slate-400' : 'text-[#647087]';
+        var mutedText = isDark ? 'text-slate-500' : 'text-[#7c879c]';
+        var strongText = isDark ? 'text-slate-100' : 'text-[#1e2433]';
+
+        var CPU_PRESETS = [
+          { label: '저전력', sub: '35/45W', pl1: 35, pl2: 45, tpp: false, tppCpu: 80, desc: '저전력 · 문서/배터리 (35W / 45W)' },
+          { label: '정숙 게임', sub: '60/85W', pl1: 60, pl2: 85, tpp: false, tppCpu: 80, desc: '정숙 게이밍 · 발열/소음 억제 (60W / 85W)' },
+          { label: '균형 게임', sub: '85/125W', pl1: 85, pl2: 125, tpp: true, tppCpu: 80, desc: '권장 게이밍 · 1% Low 방어 + TPP 250W (85W / 125W)' },
+          { label: '고성능 게임', sub: '105/145W', pl1: 105, pl2: 145, tpp: true, tppCpu: 85, desc: 'CPU 집약/고주사율 FPS 게이밍 (105W / 145W)' },
+          { label: '최대 성능', sub: '140/160W', pl1: 140, pl2: 160, tpp: true, tppCpu: 85, desc: '렌더링/벤치마크 최대 출력 (140W / 160W)' }
+        ];
+
+        var GPU_PRESETS = [[0, '제한 없음'], [2500, '2500'], [2300, '2300'], [2100, '2100'], [1900, '1900'], [1600, '1600']];
+
+        var gpuCardHighlight = ui.powerProfile === 'performance' ? stats.gpu.active : false;
+        var gpuInactive = !stats.gpu.active ? true : !ui.isGpuEnabled;
+        var cpuSpin = ((stats.fan.cpuPercent != null) ? stats.fan.cpuPercent : 0) > 0;
+        var gpuSpin = ((stats.fan.gpuPercent != null) ? stats.fan.gpuPercent : 0) > 0;
+
+        var batWattText = (stats.battery.watts === 0)
+          ? '0.0W'
+          : ((stats.battery.charging ? '+' : '') + stats.battery.watts.toFixed(1) + 'W');
+
+        var batWattCls = stats.battery.charging
+          ? (isDark ? 'text-emerald-300 font-semibold' : 'text-emerald-700 font-semibold')
+          : ((stats.battery.watts === 0) ? mutedText : (isDark ? 'text-amber-300' : 'text-amber-700'));
+
+        var gpuBtnText = gpuMissing
+          ? '미검출'
+          : ((ui.gpuRequestedWatts < 0)
+            ? 'OFF'
+            : ((ui.gpuClockCap > 0)
+              ? ('≤' + Math.round(estWatts(ui.gpuClockCap)) + 'W' + ((ui.gpuClockCapApplied === ui.gpuClockCap) ? '' : '…'))
+              : (fullGpuMaxW + 'W')));
+
+        return e('div', { className: 'w-screen h-screen flex flex-col p-3.5 gap-2 relative overflow-hidden select-none drag-region' }, [
+          !isDark ? e('div', { key: 'ba', className: 'blob-a absolute top-[-20%] left-[-10%] w-[60%] h-[60%] rounded-full filter blur-[85px] pointer-events-none bg-sky-200/35' }) : null,
+          !isDark ? e('div', { key: 'bb', className: 'blob-b absolute bottom-[-20%] right-[-10%] w-[70%] h-[70%] rounded-full filter blur-[105px] pointer-events-none bg-violet-200/35' }) : null,
+          e('div', { key: 'hdr', className: 'flex items-center justify-between gap-2 px-1 shrink-0 relative z-10 min-w-0' }, [
+            e('div', { key: 'tl', className: 'flex items-baseline gap-1.5 min-w-0 overflow-hidden' }, [
+              e('h1', {
+                key: 'h1',
+                className: 'text-xl font-extrabold tracking-tight bg-clip-text text-transparent title-shine whitespace-nowrap shrink-0',
+                style: {
+                  backgroundImage: isDark
+                    ? 'linear-gradient(90deg, #e2e8f0 0%, #c4b5fd 50%, #93c5fd 100%)'
+                    : 'linear-gradient(90deg, #1e2433 0%, #5b21b6 50%, #0369a1 100%)'
+                }
+              }, 'OMEN MAX 16'),
+              e('p', { key: 'sub', className: subText + ' text-[8.5px] font-medium tracking-wider uppercase whitespace-nowrap truncate' },
+                isDark ? 'Matte Pastel · Control Center' : 'Pastel Ceramic · Control Center'
+              ),
+              e(StatusDot, { key: 'dot', cpuTemp: stats.cpu.temp, gpuTemp: stats.gpu.temp, gpuActive: stats.gpu.active, voltage: stats.cpu.voltage })
+            ]),
+            e('div', { key: 'tr', className: 'flex items-center gap-1.5 shrink-0' }, [
+              e('button', {
+                key: 'th', type: 'button',
+                onClick: function () { setIsDark(function (prev) { return !prev; }); },
+                title: isDark ? '라이트 테마로 전환' : '무광 다크 테마로 전환',
+                className: 'no-drag top-icon-btn p-1.5 rounded-full border cursor-pointer'
+              }, isDark ? e(IconSun, { className: 'w-3.5 h-3.5 text-amber-300' }) : e(IconMoon, { className: 'w-3.5 h-3.5 text-indigo-600' })),
+              e('button', {
+                key: 'hud', type: 'button',
+                onClick: function () { sendCmd('TOGGLE_HUD'); },
+                title: '게임 오버레이 HUD',
+                className: 'no-drag top-icon-btn p-1.5 rounded-full border cursor-pointer'
+              }, e(IconMonitor, { className: 'w-3.5 h-3.5' })),
+              e('button', {
+                key: 'media', type: 'button',
+                onClick: function () { sendCmd('TOGGLE_MEDIA_HUD'); },
+                title: '뮤직 / 영상 컨트롤',
+                className: 'no-drag top-icon-btn p-1.5 rounded-full border cursor-pointer'
+              }, e(IconMusic, { className: 'w-3.5 h-3.5' })),
+              e('button', {
+                key: 'cls', type: 'button',
+                onClick: function () { sendCmd('CLOSE_WINDOW'); },
+                title: '창 닫기',
+                className: 'no-drag p-1.5 rounded-full border transition-all duration-300 hover:rotate-90 hover:scale-110 cursor-pointer ' + (isDark ? 'bg-[#291b22] hover:bg-[#38222d] border-[#4a2b3a] text-rose-300' : 'bg-[#fff1f2] hover:bg-[#ffe4e6] border-[#fecdd3] text-[#e11d48]')
+              }, e(IconClose, { className: 'w-3.5 h-3.5' }))
+            ])
+          ]),
+
+          e('div', { key: 'bar1', className: 'h-[2px] w-full rounded-full shrink-0 rgb-bar relative z-10' }),
+
+          e('div', { key: 'main', className: 'flex-1 flex flex-col justify-between gap-2.5 min-h-0 relative z-10' }, [
+            e('div', { key: 'r1', className: 'flex gap-2.5 flex-[1.35] min-h-0' }, [
+              e(GlassCard, { key: 'cpu', isDark: isDark, tone: cpuTone, className: 'px-3 pt-2.5 pb-3 flex flex-col justify-between ' + (gpuMissing ? 'flex-[2]' : 'flex-1'), delay: 60 }, [
+                e('div', { key: 'top', className: 'flex items-center justify-between w-full' }, [
+                  e('div', { key: 'l', className: 'flex items-center gap-1.5 min-w-0 pr-2 ' + (isDark ? 'text-sky-300' : 'text-sky-600') }, [
+                    e(IconCpu, { key: 'ic', className: 'w-4 h-4 flex-shrink-0 transition-transform duration-300 group-hover:scale-110' }),
+                    e('div', { key: 'tx', className: 'flex flex-col min-w-0 leading-tight' }, [
+                      e('div', { key: 't1', className: 'flex items-center gap-1' }, [
+                        e('span', { key: 'n', className: 'text-[10px] font-bold tracking-widest whitespace-nowrap ' + (isDark ? 'text-slate-300' : 'text-[#525d73]') }, 'CPU'),
+                        ui.tpp250Active ? e('span', { key: 'b', className: 'text-[7px] font-bold rounded px-1 py-0.5 tracking-wider whitespace-nowrap ' + (isDark ? 'text-sky-200 bg-[#1b2b3d] border border-sky-700/50' : 'text-sky-700 bg-sky-100 border border-sky-300/80') }, 'TPP 250W') : null
+                      ]),
+                      e('span', { key: 't2', className: 'text-[8px] ' + mutedText + ' whitespace-nowrap truncate' }, '(Ultra 9 275HX)')
+                    ])
+                  ]),
+                  e('div', { key: 'r', className: 'flex items-baseline gap-2 flex-shrink-0 ml-auto' }, [
+                    e('div', { key: 'm', className: 'flex flex-col items-end leading-tight' }, [
+                      (stats.cpu.fps != null) ? e('span', { key: 'fps', className: 'text-[9px] font-mono font-semibold whitespace-nowrap pop-in ' + (isDark ? 'text-emerald-300' : 'text-emerald-700') }, stats.cpu.fps.toFixed(0) + ' FPS') : null,
+                      e('span', { key: 'v', className: 'text-[9px] font-mono whitespace-nowrap ' + (isDark ? 'text-teal-300' : 'text-teal-700') }, (stats.cpu.voltage != null) ? (stats.cpu.voltage.toFixed(3) + ' V') : '-- V'),
+                      e('span', { key: 'c', className: 'text-[11px] font-mono font-semibold whitespace-nowrap ' + (isDark ? 'text-sky-300' : 'text-sky-700') }, stats.cpu.clock.toFixed(2) + ' GHz')
+                    ]),
+                    e('div', {
+                      key: 't',
+                      style: { textShadow: tempGlow(stats.cpu.temp, isDark) },
+                      className: 'text-2xl font-semibold tracking-tight leading-none whitespace-nowrap tabular-nums transition-colors duration-500 ' + tempTone(stats.cpu.temp, isDark)
+                    }, [Math.round(cpuTempSmooth), e('span', { key: 'u', className: 'text-sm ' + mutedText + ' ml-0.5' }, '°C')])
+                  ])
+                ]),
+                e('div', { key: 'bars', className: 'flex ' + (gpuMissing ? 'flex-row gap-4' : 'flex-col gap-1.5') + ' mt-auto' }, [
+                  e(ProgressBar, { key: 'u', label: 'USAGE', value: stats.cpu.usage, subLabel: stats.cpu.usage.toFixed(0) + '%', colorClass: 'bg-sky-400', isDark: isDark }),
+                  e(ProgressBar, { key: 'p', label: 'POWER', value: stats.cpu.power, max: cpuPowerMax, subLabel: stats.cpu.power.toFixed(1) + ' / ' + cpuPowerMax + ' W', colorClass: 'bg-violet-400', isDark: isDark })
+                ])
+              ]),
+
+              !gpuMissing ? e(GlassCard, {
+                key: 'gpu', isDark: isDark, tone: gpuTone,
+                className: 'flex-1 px-3 pt-2.5 pb-3 flex flex-col justify-between ' + (gpuInactive ? 'opacity-85' : ''),
+                highlight: gpuCardHighlight, delay: 120
+              }, [
+                e('div', { key: 'top', className: 'flex items-start justify-between' }, [
+                  e('div', { key: 'l', className: 'flex items-center gap-1.5 min-w-0 pr-2 ' + (isDark ? 'text-violet-300' : 'text-violet-600') }, [
+                    e(IconGpu, { key: 'ic', className: 'w-4 h-4 flex-shrink-0' }),
+                    e('div', { key: 'tx', className: 'flex flex-col min-w-0 leading-tight' }, [
+                      e('div', { key: 't1', className: 'flex items-center gap-1' }, [
+                        e('span', { key: 'n', className: 'text-[10px] font-bold tracking-widest ' + (isDark ? 'text-slate-300' : 'text-[#525d73]') }, 'GPU'),
+                        ui.gpuDynamicBoost ? e('span', { key: 'b', className: 'text-[7px] font-bold rounded px-1 py-0.5 tracking-wider ' + (isDark ? 'text-violet-200 bg-[#282340] border border-violet-700/50' : 'text-violet-700 bg-violet-100 border border-violet-300/80') }, 'BOOST') : null
+                      ]),
+                      e('span', { key: 't2', className: 'text-[8px] ' + mutedText + ' whitespace-nowrap truncate' }, '(RTX 5070 Ti)')
+                    ])
+                  ]),
+                  e('div', { key: 'r', className: 'flex items-baseline gap-2' }, [
+                    e('span', { key: 'c', className: 'text-[11px] font-mono font-semibold ' + (isDark ? 'text-violet-300' : 'text-violet-700') }, stats.gpu.active ? (stats.gpu.clock.toFixed(2) + ' GHz') : 'OFF'),
+                    e('div', {
+                      key: 't',
+                      style: { textShadow: stats.gpu.active ? tempGlow(stats.gpu.temp, isDark) : 'none' },
+                      className: 'text-2xl font-semibold tracking-tight leading-none tabular-nums transition-colors duration-500 ' + (stats.gpu.active ? tempTone(stats.gpu.temp, isDark) : mutedText)
+                    }, [stats.gpu.active ? Math.round(gpuTempSmooth) : '--', e('span', { key: 'u', className: 'text-sm ' + mutedText + ' ml-0.5' }, '°C')])
+                  ])
+                ]),
+                e('div', { key: 'bars', className: 'flex flex-col gap-1.5 mt-auto' }, [
+                  e(ProgressBar, { key: 'u', label: 'USAGE', value: stats.gpu.usage, subLabel: stats.gpu.usage.toFixed(0) + '%', colorClass: 'bg-purple-400', inactive: !stats.gpu.active, isDark: isDark }),
+                  e(ProgressBar, { key: 'p', label: 'POWER', value: stats.gpu.power, max: gpuPowerMax, subLabel: stats.gpu.power.toFixed(1) + ' / ' + gpuPowerMax + ' W', colorClass: 'bg-pink-400', inactive: !stats.gpu.active, isDark: isDark })
+                ])
+              ]) : null
+            ]),
+
+            e('div', { key: 'r2', className: 'flex flex-col gap-1.5 flex-none' }, [
+              e('div', { key: 'cards', className: 'flex gap-1.5' }, [
+                e(FanHalfCard, { key: 'cf', label: 'CPU FAN', colorClass: isDark ? 'text-sky-300' : 'text-sky-600', rpm: stats.fan.cpuRpm, percent: stats.fan.cpuPercent, spinning: cpuSpin, synced: fanSynced, delay: 180, isDark: isDark }),
+                e(FanHalfCard, { key: 'gf', label: 'GPU FAN', colorClass: isDark ? 'text-violet-300' : 'text-violet-600', rpm: stats.fan.gpuRpm, percent: stats.fan.gpuPercent, spinning: gpuSpin, synced: fanSynced, delay: 240, isDark: isDark })
+              ]),
+              stats.fan.error ? e('div', { key: 'err', className: 'px-2' },
+                e('span', { className: 'text-[8px] truncate block max-w-full cursor-help ' + (isDark ? 'text-rose-300' : 'text-rose-600'), title: stats.fan.error }, stats.fan.error)
+              ) : null,
+              e(GlassCard, { key: 'sw', isDark: isDark, className: 'p-1', delay: 300 },
+                e('div', { className: 'grid gap-2 w-full items-stretch', style: { gridTemplateColumns: '1.5fr 1fr', height: 34 } }, [
+                  e(FanModeSwitch, { key: 'fm', mode: ui.fanMode, onSelect: function (k) { if (k !== ui.fanMode) sendCmd('SET_FAN_MODE', k); }, isDark: isDark }),
+                  e(CurveButtons, { key: 'cb', onQuiet: function () { sendCmd('OPEN_QUIET_CURVE'); }, onCool: function () { sendCmd('OPEN_CUSTOM_CURVE'); }, isDark: isDark })
+                ])
+              )
+            ]),
+
+            e('div', { key: 'r3', className: 'flex flex-col gap-2.5 flex-[1.2] min-h-0' }, [
+              e('div', { key: 'top', className: 'flex gap-2.5 flex-[1.1] min-h-0' }, [
+                e(GlassCard, { key: 'bat', isDark: isDark, className: 'w-[45%] px-3 py-1.5 flex items-center', delay: 360 },
+                  e('div', { className: 'flex items-center justify-between w-full' }, [
+                    e('div', { key: 'l', className: 'flex items-center gap-2 min-w-0' }, [
+                      e('div', {
+                        key: 'ic',
+                        className: 'p-1.5 rounded-full shrink-0 transition-transform duration-200 hover:scale-105 ' + (isDark ? 'bg-[#1c2e29] text-emerald-300' : 'bg-emerald-100/90 text-emerald-600') + ' ' + (stats.battery.charging ? 'charge-pulse' : '')
+                      }, e(IconBattery, { level: stats.battery.percent, className: 'w-4 h-4' })),
+                      e('div', { key: 'tx', className: 'flex flex-col justify-center leading-tight min-w-0' }, [
+                        e('div', { key: 'pct', className: 'flex items-baseline gap-0.5' }, [
+                          e('span', { key: 'n', className: 'text-[19px] font-semibold leading-none tabular-nums ' + strongText }, stats.battery.percent),
+                          e('span', { key: 'u', className: 'text-[9.5px] font-mono ' + subText }, '%')
+                        ]),
+                        e('span', { key: 'w', className: 'text-[8.5px] font-mono tracking-wider mt-0.5 leading-none whitespace-nowrap transition-colors duration-300 ' + batWattCls }, batWattText)
+                      ])
+                    ]),
+                    e('button', {
+                      key: 'lk', type: 'button',
+                      onClick: function () { sendCmd('TOGGLE_BATTERY_LOCK'); },
+                      className: 'no-drag p-1.5 rounded-full shrink-0 transition-all duration-200 border cursor-pointer hover:scale-105 active:scale-95 ' +
+                        (ui.isLocked ? (isDark ? 'bg-[#2a2542] border-[#594b87] text-violet-200' : 'bg-violet-100 border-violet-300 text-violet-700') : (isDark ? 'bg-[#151822] border-[#2a2f42] text-slate-400 hover:text-slate-200' : 'bg-[#f6f7fb] border-[#e4e8f1] text-[#94a3b8] hover:text-[#4b5563]'))
+                    }, e(IconLock, { className: 'w-3.5 h-3.5', isLocked: ui.isLocked }))
+                  ])
+                ),
+
+                e(GlassCard, { key: 'pf', isDark: isDark, className: 'flex-1 p-1.5 flex gap-1.5', delay: 420 },
+                  e('div', { className: 'flex gap-1.5 w-full h-full' }, [
+                    e(GlassButton, { key: 'eco', active: ui.powerProfile === 'efficient', onClick: function () { sendCmd('SET_POWER', 'efficient'); }, className: 'flex-1 py-1' }, [
+                      e('span', { key: 't', className: 'text-[10px]' }, 'ECO'),
+                      e('span', { key: 's', className: 'text-[8px] ' + mutedText + ' scale-95' }, '저전력 모드')
+                    ]),
+                    e(GlassButton, { key: 'bal', active: ui.powerProfile === 'balanced', onClick: function () { sendCmd('SET_POWER', 'balanced'); }, className: 'flex-1 py-1' },
+                      e('span', { key: 't', className: 'text-[10px]' }, 'BALANCED')
+                    ),
+                    e(GlassButton, { key: 'max', active: ui.powerProfile === 'performance', onClick: function () { sendCmd('SET_POWER', 'performance'); }, className: 'flex-1 py-1 ' + (isDark ? 'text-amber-300' : 'text-amber-700') },
+                      e('span', { key: 't', className: 'text-[10px]' }, 'MAX')
+                    )
+                  ])
+                )
+              ]),
+
+              e('div', { key: 'bot', className: 'grid grid-cols-3 gap-2.5 flex-1 min-h-0' }, [
+                e('div', { key: 'disp', className: 'relative' },
+                  e(GlassCard, { isDark: isDark, className: 'p-1.5 flex items-center h-full', delay: 480 },
+                    e(GlassButton, { active: ui.refreshRate === 240, onClick: function () { sendCmd('TOGGLE_REFRESH_RATE'); }, isRow: true, className: 'flex-1 h-full' }, [
+                      e('span', { key: 'l', className: 'text-[9px] ' + subText + ' whitespace-nowrap' }, 'DISPLAY'),
+                      e('span', { key: 'v', className: 'text-[11px] font-bold whitespace-nowrap' }, ui.refreshRate + 'Hz')
+                    ])
+                  )
+                ),
+
+                e('div', { key: 'cpup', className: 'relative' }, [
+                  e(GlassCard, { key: 'c', isDark: isDark, className: 'p-1.5 flex items-center h-full', delay: 540 },
+                    e(GlassButton, {
+                      onClick: function () {
+                        sendCmd('OPEN_CPU_POWER');
+                        setCpuPowerModal(function (m) {
+                          return Object.assign({}, m, {
+                            open: !m.open,
+                            pl1: (ui.cpuPl1Watts != null) ? ui.cpuPl1Watts : m.pl1,
+                            pl2: (ui.cpuPl2Watts != null) ? ui.cpuPl2Watts : m.pl2,
+                            tau: (ui.cpuTauSeconds != null) ? ui.cpuTauSeconds : m.tau,
+                            tpp250: (ui.tpp250AutoBalance != null) ? ui.tpp250AutoBalance : m.tpp250,
+                            tppCpu: (ui.tppCpuWatts != null) ? ui.tppCpuWatts : m.tppCpu
+                          });
+                        });
+                      },
+                      isRow: true,
+                      className: 'flex-1 h-full'
+                    }, [
+                      e('span', { key: 'l', className: 'text-[9px] ' + subText + ' whitespace-nowrap' }, 'CPU 전력'),
+                      e('span', { key: 'v', className: 'text-[11px] font-bold font-mono whitespace-nowrap ' + (isDark ? 'text-sky-300' : 'text-sky-700') },
+                        ui.tpp250Active ? (ui.cpuEffectivePl2Watts + 'W TPP') : (ui.cpuPl1Watts + '/' + ui.cpuPl2Watts + 'W')
+                      )
+                    ])
+                  ),
+                  cpuPowerModal.open ? e(Popover, { key: 'cpup-pop', align: 'center', width: 320, isDark: isDark }, [
+                    e('div', { key: 'h', className: 'flex items-center justify-between' }, [
+                      e('h2', { key: 't', className: 'text-[11px] font-bold ' + strongText }, 'CPU 게이밍 전력 제한 (275HX · 15~160W)'),
+                      e('button', {
+                        key: 'x', type: 'button',
+                        onClick: function () { setCpuPowerModal(function (m) { return Object.assign({}, m, { open: false }); }); },
+                        className: 'no-drag px-1.5 py-0.5 rounded text-[10px] ' + subText + ' hover:opacity-80 cursor-pointer'
+                      }, '✕')
+                    ]),
+                    e('div', { key: 'pr', className: 'grid grid-cols-5 gap-1' }, CPU_PRESETS.map(function (p) {
+                      var act = (cpuPowerModal.pl1 === p.pl1 && cpuPowerModal.pl2 === p.pl2) ? 'is-active' : '';
+                      return e('button', {
+                        key: p.label, type: 'button', title: p.desc,
+                        onClick: function () {
+                          setCpuPowerModal(function (m) {
+                            return Object.assign({}, m, { pl1: p.pl1, pl2: p.pl2, tpp250: p.tpp, tppCpu: p.tppCpu });
+                          });
+                        },
+                        className: 'no-drag interactive-btn ' + act + ' py-1 px-1 rounded-lg border flex flex-col items-center leading-none cursor-pointer'
+                      }, [
+                        e('span', { key: 'l', className: 'text-[8.5px] font-semibold whitespace-nowrap' }, p.label),
+                        e('span', { key: 's', className: 'text-[7.5px] ' + mutedText + ' mt-0.5 whitespace-nowrap' }, p.sub)
+                      ]);
+                    })),
+                    e('div', { key: 'sl', className: 'flex flex-col gap-1' }, [
+                      e('div', { key: 's1' }, [
+                        e('div', { key: 't', className: 'flex justify-between text-[8.5px] ' + subText + ' mb-0.5' }, [
+                          e('span', { key: 'l' }, 'PL1 (지속 전력)'),
+                          e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-sky-300' : 'text-sky-700') }, cpuPowerModal.pl1 + 'W')
+                        ]),
+                        e('input', {
+                          key: 'i', type: 'range', min: 15, max: 160, step: 5, value: cpuPowerModal.pl1,
+                          onChange: function (ev) {
+                            var v = parseInt(ev.target.value, 10);
+                            setCpuPowerModal(function (m) { return Object.assign({}, m, { pl1: v, pl2: Math.max(m.pl2, v) }); });
+                          },
+                          className: 'w-full cursor-pointer'
+                        })
+                      ]),
+                      e('div', { key: 's2' }, [
+                        e('div', { key: 't', className: 'flex justify-between text-[8.5px] ' + subText + ' mb-0.5' }, [
+                          e('span', { key: 'l' }, 'PL2 (부스트 전력)'),
+                          e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-amber-300' : 'text-amber-700') }, cpuPowerModal.pl2 + 'W')
+                        ]),
+                        e('input', {
+                          key: 'i', type: 'range', min: 15, max: 160, step: 5, value: cpuPowerModal.pl2,
+                          onChange: function (ev) {
+                            var v = parseInt(ev.target.value, 10);
+                            setCpuPowerModal(function (m) { return Object.assign({}, m, { pl2: v, pl1: Math.min(m.pl1, v) }); });
+                          },
+                          className: 'w-full cursor-pointer'
+                        })
+                      ]),
+                      e('div', { key: 's3' }, [
+                        e('div', { key: 't', className: 'flex justify-between text-[8.5px] ' + subText + ' mb-0.5' }, [
+                          e('span', { key: 'l' }, 'Tau (부스트 유지 시간)'),
+                          e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-violet-300' : 'text-violet-700') }, cpuPowerModal.tau + '초')
+                        ]),
+                        e('input', {
+                          key: 'i', type: 'range', min: 1, max: 56, step: 1, value: cpuPowerModal.tau,
+                          onChange: function (ev) {
+                            var v = parseInt(ev.target.value, 10);
+                            setCpuPowerModal(function (m) { return Object.assign({}, m, { tau: v }); });
+                          },
+                          className: 'w-full cursor-pointer'
+                        })
+                      ])
+                    ]),
+                    e('div', { key: 'tpp', className: 'flex flex-col gap-1 rounded-xl px-2.5 py-1.5 border ' + (isDark ? 'bg-[#141721] border-[#292e42]' : 'bg-[#f6f7fb] border-[#e4e8f1]') }, [
+                      e('div', { key: 'r', className: 'flex items-center justify-between gap-2' }, [
+                        e('div', { key: 'tx', className: 'flex flex-col leading-tight' }, [
+                          e('span', { key: '1', className: 'text-[9.5px] font-semibold ' + strongText }, 'TPP 250W 게이밍 동적 배분'),
+                          e('span', { key: '2', className: 'text-[7.5px] ' + subText }, 'GPU 고부하 시 CPU ' + cpuPowerModal.tppCpu + 'W + GPU ' + (250 - cpuPowerModal.tppCpu) + 'W 균형 유지')
+                        ]),
+                        e(ToggleSwitch, {
+                          key: 'tg', checked: cpuPowerModal.tpp250,
+                          onChange: function (v) { setCpuPowerModal(function (m) { return Object.assign({}, m, { tpp250: v }); }); },
+                          isDark: isDark
+                        })
+                      ]),
+                      cpuPowerModal.tpp250 ? e('div', { key: 'sub', className: 'pt-1 border-t ' + (isDark ? 'border-[#292e42]' : 'border-[#e4e8f1]') }, [
+                        e('div', { key: 't', className: 'flex justify-between text-[7.5px] ' + subText + ' mb-0.5' }, [
+                          e('span', { key: 'l' }, '동시 부하 시 CPU 상한'),
+                          e('span', { key: 'v', className: 'font-mono font-semibold ' + (isDark ? 'text-sky-300' : 'text-sky-700') }, cpuPowerModal.tppCpu + 'W (GPU ' + (250 - cpuPowerModal.tppCpu) + 'W 여유)')
+                        ]),
+                        e('input', {
+                          key: 'i', type: 'range', min: 55, max: 105, step: 5, value: cpuPowerModal.tppCpu,
+                          onChange: function (ev) {
+                            var v = parseInt(ev.target.value, 10);
+                            setCpuPowerModal(function (m) { return Object.assign({}, m, { tppCpu: v }); });
+                          },
+                          className: 'w-full cursor-pointer'
+                        })
+                      ]) : null
+                    ]),
+                    e('div', { key: 'ft', className: 'flex items-center justify-between gap-2 pt-0.5' }, [
+                      e('p', { key: 'st', className: 'text-[7.5px] ' + mutedText + ' truncate flex-1', title: ui.cpuTuningStatus }, ui.cpuTuningStatus),
+                      e('div', { key: 'bt', className: 'flex gap-1.5 shrink-0' }, [
+                        e('button', {
+                          key: 'c', type: 'button',
+                          onClick: function () { setCpuPowerModal(function (m) { return Object.assign({}, m, { open: false }); }); },
+                          className: 'no-drag interactive-btn px-2 py-1 rounded-lg border text-[9.5px] cursor-pointer'
+                        }, '취소'),
+                        e('button', {
+                          key: 's', type: 'button',
+                          onClick: function () {
+                            sendCmd('SAVE_CPU_POWER', {
+                              pl1: cpuPowerModal.pl1,
+                              pl2: cpuPowerModal.pl2,
+                              tau: cpuPowerModal.tau,
+                              tpp250AutoBalance: cpuPowerModal.tpp250,
+                              tppCpuWatts: cpuPowerModal.tppCpu
+                            });
+                            setCpuPowerModal(function (m) { return Object.assign({}, m, { open: false }); });
+                          },
+                          className: 'no-drag px-2 py-1 rounded-lg text-[9.5px] font-semibold transition-all duration-150 hover:-translate-y-0.5 active:scale-95 border cursor-pointer ' + (isDark ? 'bg-[#1c2c3d] text-sky-200 border-[#385a7c] hover:bg-[#23374d]' : 'bg-sky-100 text-sky-800 border-sky-300 hover:bg-sky-200/80')
+                        }, '적용')
+                      ])
+                    ])
+                  ]) : null]),
+                e('div', { key: 'gpup', className: 'relative' }, [
+                  e(GlassCard, { key: 'c', isDark: isDark, className: 'p-1.5 flex items-center h-full', delay: 600 },
+                    e(GlassButton, { disabled: gpuMissing, onClick: function () { setGpuModal({ open: true, cap: ui.gpuClockCap ? ui.gpuClockCap : 0 }); }, isRow: true, className: 'flex-1 h-full' }, [
+                      e('span', { key: 'l', className: 'text-[9px] ' + subText + ' whitespace-nowrap' }, 'GPU'),
+                      e('span', {
+                        key: 'v',
+                        className: 'text-[11px] font-bold font-mono whitespace-nowrap ' + ((ui.gpuRequestedWatts < 0) ? (isDark ? 'text-rose-300' : 'text-rose-600') : (isDark ? 'text-violet-300' : 'text-violet-700'))
+                      }, gpuBtnText)
+                    ])
+                  ),
+                  gpuModal.open ? e(Popover, { key: 'pop', align: 'right', width: 300, isDark: isDark }, [
+                    e('h2', { key: 'h', className: 'text-[11px] font-bold ' + strongText }, 'GPU 전력 제어 (RTX 5070 Ti · 140~175W)'),
+                    e('p', { key: 'st', className: 'text-[8.5px] ' + subText }, ui.gpuModeStatus),
+                    e('div', { key: 'sw', className: 'flex flex-col gap-1 rounded-xl px-2.5 py-1.5 border ' + (isDark ? 'bg-[#141721] border-[#292e42]' : 'bg-[#f6f7fb] border-[#e4e8f1]') }, [
+                      e('div', { key: 'ct', className: 'flex items-center justify-between' }, [
+                        e('div', { key: 'tx', className: 'flex flex-col leading-tight' }, [
+                          e('span', { key: '1', className: 'text-[9.5px] font-semibold ' + strongText }, 'cTGP 확장 (140W → 175W)'),
+                          e('span', { key: '2', className: 'text-[7.5px] ' + subText }, 'HP BIOS 커스텀 TGP 상한 활성화')
+                        ]),
+                        e(ToggleSwitch, { key: 'tg', checked: ui.gpuCtgp, onChange: function (v) { sendCmd('SET_GPU_POWER', { ctgp: v, ppab: ui.gpuDynamicBoost, dstate: 1 }); }, isDark: isDark })
+                      ]),
+                      e('div', { key: 'db', className: 'flex items-center justify-between pt-1 border-t ' + (isDark ? 'border-[#292e42]' : 'border-[#e4e8f1]') }, [
+                        e('div', { key: 'tx', className: 'flex flex-col leading-tight' }, [
+                          e('span', { key: '1', className: 'text-[9.5px] font-semibold ' + strongText }, 'Dynamic Boost (PPAB +35W)'),
+                          e('span', { key: '2', className: 'text-[7.5px] ' + subText }, 'CPU 여유 전력을 GPU 175W로 동적 배분')
+                        ]),
+                        e(ToggleSwitch, { key: 'tg', checked: ui.gpuDynamicBoost, onChange: function (v) { sendCmd('SET_GPU_POWER', { ctgp: ui.gpuCtgp, ppab: v, dstate: 1 }); }, isDark: isDark })
+                      ])
+                    ]),
+                    e('div', { key: 'pr', className: 'grid grid-cols-3 gap-1' }, GPU_PRESETS.map(function (item) {
+                      var v = item[0], l = item[1];
+                      var act = (gpuModal.cap === v) ? 'is-active' : '';
+                      return e('button', {
+                        key: v, type: 'button',
+                        onClick: function () { setGpuModal(Object.assign({}, gpuModal, { cap: v })); },
+                        className: 'no-drag interactive-btn ' + act + ' py-1 rounded-lg border flex flex-col items-center leading-none cursor-pointer'
+                      }, [
+                        e('span', { key: 'l', className: 'text-[9.5px] font-semibold' }, l),
+                        e('span', { key: 'w', className: 'text-[7.5px] ' + mutedText + ' mt-0.5' }, v ? ('≈' + Math.round(estWatts(v)) + 'W') : ('≈' + fullGpuMaxW + 'W'))
+                      ]);
+                    })),
+                    e('div', { key: 'sl', className: 'flex items-center gap-2' }, [
+                      e('input', {
+                        key: 'i', type: 'range', min: 1200, max: 2800, step: 50,
+                        value: gpuModal.cap ? gpuModal.cap : 2800,
+                        onChange: function (ev) {
+                          var v = parseInt(ev.target.value, 10);
+                          setGpuModal(Object.assign({}, gpuModal, { cap: (v >= 2800) ? 0 : v }));
+                        },
+                        className: 'flex-1 cursor-pointer'
+                      }),
+                      e('span', { key: 'v', className: 'text-[10.5px] font-mono font-bold w-16 text-right ' + (isDark ? 'text-violet-300' : 'text-violet-700') }, gpuModal.cap ? (gpuModal.cap + 'MHz') : '무제한')
+                    ]),
+                    e('div', { key: 'ft', className: 'flex gap-2 justify-between' }, [
+                      e('button', {
+                        key: 'off', type: 'button',
+                        onClick: function () { sendCmd('SET_GPU_MODE', -1); setGpuModal(Object.assign({}, gpuModal, { open: false })); },
+                        className: 'no-drag px-2 py-1 rounded-lg text-[9.5px] font-medium transition-all duration-150 hover:-translate-y-0.5 active:scale-95 border cursor-pointer ' + (isDark ? 'bg-[#2b1b22] text-rose-200 border-[#4d2c3a] hover:bg-[#36222b]' : 'bg-rose-100/90 text-rose-700 border-rose-300 hover:bg-rose-200/80')
+                      }, '끄기'),
+                      e('div', { key: 'rb', className: 'flex gap-1.5' }, [
+                        e('button', {
+                          key: 'c', type: 'button',
+                          onClick: function () { setGpuModal(Object.assign({}, gpuModal, { open: false })); },
+                          className: 'no-drag interactive-btn px-2 py-1 rounded-lg border text-[9.5px] cursor-pointer'
+                        }, '취소'),
+                        e('button', {
+                          key: 's', type: 'button',
+                          onClick: function () { sendCmd('SET_GPU_CLOCK_CAP', gpuModal.cap); setGpuModal(Object.assign({}, gpuModal, { open: false })); },
+                          className: 'no-drag px-2 py-1 rounded-lg text-[9.5px] font-semibold transition-all duration-150 hover:-translate-y-0.5 active:scale-95 border cursor-pointer ' + (isDark ? 'bg-[#282340] text-violet-200 border-[#584987] hover:bg-[#312b4f]' : 'bg-violet-100 text-violet-800 border-violet-300 hover:bg-violet-200/80')
+                        }, '적용')
+                      ])
+                    ])
+                  ]) : null
+                ])
+              ])
+            ])
+          ]),
+
+          e('div', { key: 'bar2', className: 'h-[2px] w-full rounded-full shrink-0 rgb-bar relative z-10' })
+        ]);
+      }
+
+      var root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(e(ErrorBoundary, null, e(App)));
+
+      document.addEventListener('mousedown', function (ev) {
+        if (ev.button !== 0) return;
+        if (ev.target.closest('.no-drag, input, button, #curve-modal')) return;
+        if (ev.target.closest('.drag-region')) {
+          if (window.chrome) {
+            if (window.chrome.webview) {
+              window.chrome.webview.postMessage({ cmd: 'DRAG_WINDOW' });
+            }
+          }
+        }
+      });
+    })();
+    </script>
+    <style>
+      @keyframes modalFade { from { opacity: 0; } to { opacity: 1; } }
+      .guide-flow{animation:dashFlow 1.2s linear infinite}
+      #curve-modal{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;padding:14px;background:rgba(15,23,42,.42);font-family:"Segoe UI",sans-serif;color:var(--text-main)}
+      html:not([data-theme="dark"]) #curve-modal{backdrop-filter:blur(4px)}
+      #curve-modal.open{display:flex;animation:modalFade .2s ease both}
+      #curve-modal.open #curve-dialog{animation:popIn .25s cubic-bezier(.2,.9,.3,1.15) both}
+      #curve-modal *{box-sizing:border-box}
+      #curve-dialog{display:flex;flex-direction:column;width:min(630px,100%);height:min(500px,100%);min-height:0;padding:17px;background:var(--popover-bg);border:1px solid var(--popover-border);border-radius:17px;box-shadow:0 18px 48px rgba(15,23,42,.22);transition:border-color .25s,background-color .25s}
+      .curve-top,.curve-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none}.curve-top{margin-bottom:8px;font-size:14px;font-weight:700;letter-spacing:.1em}
+      #curve-modal button{border:1px solid var(--btn-border);border-radius:8px;background:var(--btn-bg);color:var(--btn-text);padding:8px 13px;font:600 12px "Segoe UI",sans-serif;cursor:pointer;transition:all .16s ease}
+      #curve-modal button:hover{background:var(--btn-bg-hover);border-color:var(--card-border-hover);transform:translateY(-1px)}#curve-modal button:active{transform:scale(.97)}#curve-modal button.primary{background:var(--btn-active-bg);border-color:var(--btn-active-border);color:var(--btn-active-text)}
+      .curve-tabs{display:flex;gap:6px;margin-bottom:10px;flex:none}
+      .curve-tab{flex:1;padding:7px 0;border-radius:8px;border:1px solid var(--btn-border);background:var(--btn-bg);color:var(--btn-text);font-size:11px;font-weight:700;letter-spacing:.08em;text-align:center;cursor:pointer;transition:all .18s}
+      .curve-tab:hover{background:var(--btn-bg-hover);transform:translateY(-1px)}
+      .curve-tab.active-cpu{background:rgba(56,189,248,.16);border-color:rgba(56,189,248,.5);color:#0284c7}
+      html[data-theme="dark"] .curve-tab.active-cpu{background:#1b2938;border-color:#3e6385;color:#7dd3fc}
+      .curve-tab.active-gpu{background:rgba(167,139,250,.18);border-color:rgba(167,139,250,.5);color:#6d28d9}
+      html[data-theme="dark"] .curve-tab.active-gpu{background:#282340;border-color:#594b87;color:#ddd6fe}
+      #curve-main{display:flex;flex:1;min-height:0;gap:7px}.curve-y{display:flex;flex-direction:column;justify-content:space-between;width:35px;padding-bottom:20px;text-align:right;color:var(--btn-text);opacity:.75;font:11px Consolas,monospace}
+      .curve-plot{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
+      #curve-svg{width:100%;flex:1;min-height:0;touch-action:none;border-radius:9px;border:1px solid var(--popover-border);background-color:var(--card-bg);background-image:linear-gradient(to right,var(--btn-border) 1px,transparent 1px),linear-gradient(to bottom,var(--btn-border) 1px,transparent 1px);background-size:20% 20%;cursor:crosshair}
+      .curve-x{height:20px;display:flex;justify-content:space-between;padding-top:5px;color:var(--btn-text);opacity:.75;font:11px Consolas,monospace}
+      .curve-bottom{margin-top:12px}.curve-help{font-size:11px;color:var(--btn-text);opacity:.75}.curve-error{color:#e11d48;font-size:11px;min-height:15px;margin-top:6px}
+    </style>
+    <div id="curve-modal" class="no-drag" role="dialog" aria-modal="true" aria-label="팬 커브 편집기">
+      <div id="curve-dialog" class="no-drag">
+        <div class="curve-top"><span id="curve-title">COOL 팬 커브 설정</span><button id="curve-close" type="button">✕</button></div>
+        <div class="curve-tabs">
+          <div id="curve-tab-cpu" class="curve-tab active-cpu">CPU 팬 커브</div>
+          <div id="curve-tab-gpu" class="curve-tab">GPU 팬 커브</div>
+        </div>
+        <div id="curve-main"><div id="curve-y" class="curve-y"><span>100%</span><span>50%</span><span>0%</span></div>
+          <div class="curve-plot"><svg id="curve-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg><div class="curve-x"><span>35°C</span><span>70°C</span><span>100°C</span></div></div>
+        </div>
+        <div id="curve-error" class="curve-error"></div>
+        <div class="curve-bottom"><span id="curve-help" class="curve-help">클릭: 추가 · 드래그: 이동 · 우클릭: 삭제 · 탭 전환 시 각 데이터는 유지되며, 저장은 CPU/GPU 를 함께 저장합니다.</span><div><button id="curve-cancel" type="button">취소</button> <button id="curve-save" class="primary" type="button">저장하고 적용</button></div></div>
+      </div>
+    </div>
+    <script>
+    (function(){
+      'use strict';
+      var modal=document.getElementById('curve-modal'),svg=document.getElementById('curve-svg'),error=document.getElementById('curve-error');
+      var dialog=document.getElementById('curve-dialog'),titleEl=document.getElementById('curve-title'),helpEl=document.getElementById('curve-help');
+      var tabCpu=document.getElementById('curve-tab-cpu'),tabGpu=document.getElementById('curve-tab-gpu');
+      var NS='http://www.w3.org/2000/svg';
+      var PADDING=8,DOT_RADIUS=4.5;
+
+      var curves={cpu:[],gpu:[]};
+      var activeFan='cpu';
+      var kind='cool';
+      var drag=-1,saving=false;
+
+      function yMax(){return 100;}
+      function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+      function points(){return curves[activeFan];}
+      function setPoints(p){curves[activeFan]=p;}
+
+      function pointPixels(p,r){
+        return {x:PADDING+(p.TemperatureCelsius-35)/65*(r.width-PADDING*2),y:PADDING+(yMax()-p.FanPercent)/yMax()*(r.height-PADDING*2)};
+      }
+      function coordinates(ev){
+        var r=svg.getBoundingClientRect();
+        var x=clamp((ev.clientX-r.left-PADDING)/(r.width-PADDING*2),0,1);
+        var y=clamp((ev.clientY-r.top-PADDING)/(r.height-PADDING*2),0,1);
+        return {TemperatureCelsius:Math.round(35+65*x),FanPercent:Math.round(yMax()*(1-y))};
+      }
+      function hit(ev){
+        var r=svg.getBoundingClientRect();
+        return points().findIndex(function(p){
+          var pixel=pointPixels(p,r);
+          return Math.hypot(ev.clientX-r.left-pixel.x,ev.clientY-r.top-pixel.y)<=10;
+        });
+      }
+      function updateTabStyle(){
+        tabCpu.classList.toggle('active-cpu',activeFan==='cpu');
+        tabGpu.classList.toggle('active-gpu',activeFan==='gpu');
+      }
+      function applyKindTheme(){
+        var dark=document.documentElement.getAttribute('data-theme')==='dark';
+        var quiet=kind==='quiet';
+        titleEl.textContent=quiet?'QUIET 팬 커브 설정':'COOL 팬 커브 설정';
+        titleEl.style.color=quiet?(dark?'#6ee7b7':'#047857'):(dark?'#7dd3fc':'#0369a1');
+        dialog.style.borderColor=quiet?(dark?'#3d6b5d':'#6ee7b7'):(dark?'#3e6385':'#7dd3fc');
+        dialog.style.boxShadow=dark?'0 18px 48px rgba(0,0,0,.45)':'0 18px 48px rgba(15,23,42,.2)';
+        helpEl.textContent=quiet
+          ?'QUIET: CPU/GPU 개별 온도 계산 후 높은 쪽 목표치로 양쪽 팬이 동일 속도로 동기화됩니다.'
+          :'COOL: CPU/GPU 개별 온도 계산 후 높은 쪽 목표치로 양쪽 팬이 동일 속도로 동기화됩니다.';
+        var labels=document.querySelectorAll('#curve-y span');
+        labels[0].textContent=yMax()+'%';
+        labels[1].textContent=(yMax()/2)+'%';
+        labels[2].textContent='0%';
+      }
+      function draw(){
+        var r=svg.getBoundingClientRect();
+        if(r.width<=PADDING*2)return;
+        if(r.height<=PADDING*2)return;
+        var lineColor=(activeFan==='cpu')?'#38bdf8':'#a78bfa';
+        var dotStroke=(activeFan==='cpu')?'#0284c7':'#7c3aed';
+        function position(p){var v=pointPixels(p,r);return {x:v.x/r.width*100,y:v.y/r.height*100};}
+        svg.replaceChildren();
+
+        {
+          var g=position({TemperatureCelsius:35,FanPercent:40});
+          var guide=document.createElementNS(NS,'line');
+          guide.setAttribute('x1','0');guide.setAttribute('x2','100');guide.setAttribute('y1',g.y);guide.setAttribute('y2',g.y);
+          guide.setAttribute('stroke','#f59e0b88');guide.setAttribute('stroke-width','1');guide.setAttribute('stroke-dasharray','3 3');guide.setAttribute('vector-effect','non-scaling-stroke');
+          guide.setAttribute('class','guide-flow');
+          svg.appendChild(guide);
+        }
+
+        var pts=points();
+        if(pts.length>=2){
+          var first=position(pts[0]),last=position(pts[pts.length-1]);
+          var area=document.createElementNS(NS,'polygon');
+          area.setAttribute('points',[first.x+',100'].concat(pts.map(function(p){var v=position(p);return v.x+','+v.y;})).concat([last.x+',100']).join(' '));
+          area.setAttribute('fill',lineColor+'2e');
+          svg.appendChild(area);
+        }
+
+        var line=document.createElementNS(NS,'polyline');
+        line.setAttribute('points',pts.map(function(p){var v=position(p);return v.x+','+v.y;}).join(' '));
+        line.setAttribute('fill','none');line.setAttribute('stroke',lineColor);line.setAttribute('stroke-width','2');line.setAttribute('vector-effect','non-scaling-stroke');svg.appendChild(line);
+        for(var k=0;k<pts.length;k++){
+          var p=pts[k];
+          var v=position(p),dot=document.createElementNS(NS,'ellipse');
+          dot.setAttribute('cx',v.x);dot.setAttribute('cy',v.y);
+          dot.setAttribute('rx',DOT_RADIUS/r.width*100);dot.setAttribute('ry',DOT_RADIUS/r.height*100);
+          dot.setAttribute('fill','#ffffff');dot.setAttribute('stroke',dotStroke);dot.setAttribute('stroke-width','1.8');dot.setAttribute('vector-effect','non-scaling-stroke');svg.appendChild(dot);
+        }
+      }
+      function switchTab(fan){
+        if(saving)return;
+        if(fan===activeFan)return;
+        activeFan=fan;drag=-1;
+        updateTabStyle();draw();
+      }
+      tabCpu.addEventListener('click',function(){switchTab('cpu');});
+      tabGpu.addEventListener('click',function(){switchTab('gpu');});
+      new ResizeObserver(function(){if(modal.classList.contains('open'))draw();}).observe(svg);
+      svg.addEventListener('pointerdown',function(ev){
+        if(ev.button!==0)return;
+        if(saving)return;
+        var index=hit(ev);
+        if(index>=0)drag=index;
+        else {
+          var p=coordinates(ev);
+          var cur=points();
+          if(cur.length>=20)return;
+          if(cur.some(function(x){return Math.abs(x.TemperatureCelsius-p.TemperatureCelsius)<3;}))return;
+          var next=cur.concat([p]).sort(function(a,b){return a.TemperatureCelsius-b.TemperatureCelsius;});
+          setPoints(next);
+          drag=next.indexOf(p);
+          draw();
+        }
+        svg.setPointerCapture(ev.pointerId);ev.preventDefault();
+      });
+      svg.addEventListener('pointermove',function(ev){
+        if(drag<0)return;
+        if(saving)return;
+        var cur=points();
+        var p=coordinates(ev),min=(drag===0)?35:(cur[drag-1].TemperatureCelsius+3),max=(drag===cur.length-1)?100:(cur[drag+1].TemperatureCelsius-3);
+        cur[drag]={TemperatureCelsius:clamp(p.TemperatureCelsius,min,max),FanPercent:p.FanPercent};
+        draw();
+      });
+      svg.addEventListener('pointerup',function(){drag=-1;});
+      svg.addEventListener('pointercancel',function(){drag=-1;});
+      svg.addEventListener('contextmenu',function(ev){
+        ev.preventDefault();
+        var i=hit(ev);
+        if(i>=0){
+          if(points().length>2){
+            if(!saving){
+              setPoints(points().filter(function(_,j){return i!==j;}));
+              draw();
+            }
+          }
+        }
+      });
+      function close(){if(!saving){modal.classList.remove('open');error.textContent='';drag=-1;}}
+      document.getElementById('curve-close').addEventListener('click',close);
+      document.getElementById('curve-cancel').addEventListener('click',close);
+      document.getElementById('curve-save').addEventListener('click',function(){
+        if(saving)return;
+        if(curves.cpu.length<2)return;
+        if(curves.gpu.length<2)return;
+        saving=true;error.textContent='저장 중...';
+        window.chrome.webview.postMessage({cmd:(kind==='quiet')?'SAVE_QUIET_CURVE':'SAVE_CUSTOM_CURVE',points:{cpu:curves.cpu,gpu:curves.gpu}});
+      });
+      document.addEventListener('keydown',function(ev){
+        if(ev.key==='Escape'){
+          if(modal.classList.contains('open')){ev.stopPropagation();close();}
+          else { window.dispatchEvent(new CustomEvent('omen-close-cpu-modal')); }
+        }
+      },true);
+      window.chrome.webview.addEventListener('message',function(ev){
+        var m=ev.data;
+        if(m){
+          if(m.cmd==='OPEN_CURVE'){
+            kind=(m.kind==='quiet')?'quiet':'cool';
+            function toArr(arr){
+              return Array.isArray(arr)?arr.map(function(p){return {TemperatureCelsius:Number(p.TemperatureCelsius),FanPercent:Math.min(Number(p.FanPercent),yMax())};}).sort(function(a,b){return a.TemperatureCelsius-b.TemperatureCelsius;}):[];
+            }
+            curves.cpu=toArr(m.points ? m.points.cpu : null);
+            curves.gpu=toArr(m.points ? m.points.gpu : null);
+            activeFan='cpu';
+            saving=false;error.textContent='';
+            applyKindTheme();
+            updateTabStyle();
+            modal.classList.add('open');draw();
+          }else if(m.cmd==='CURVE_SAVE_RESULT'){
+            saving=false;
+            if(m.ok)close();else error.textContent=m.error ? m.error : '저장 실패';
+          }
+        }
+      });
+    })();
+    </script>
+</body>
+</html>
